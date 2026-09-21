@@ -31,6 +31,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 // 128-bit 展开：16-bit UUID -> 标准 base UUID
 String _u16(String hex) =>
@@ -497,22 +498,56 @@ class BleCgmManager {
   }
 
   /// 开始扫描 CGM 设备
-  Future<void> startScan() async {
+  /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
+  Future<String?> startScan() async {
+    // 1. 权限：Android 12+ 要 BLUETOOTH_SCAN/CONNECT，老版本要定位
+    final scan = await Permission.bluetoothScan.request();
+    final connect = await Permission.bluetoothConnect.request();
+    final location = await Permission.locationWhenInUse.request();
+    if (!scan.isGranted || !connect.isGranted) {
+      const msg = '缺少蓝牙权限：请在系统设置 → 应用 → 血糖管家 → 权限中允许"附近的设备"';
+      _log(msg);
+      _setState(BleCgmState.error);
+      return msg;
+    }
+    if (!location.isGranted) {
+      _log('提醒：未授予定位权限，Android 11 及以下可能扫不到 BLE 设备');
+    }
+
+    // 2. 蓝牙开关
+    final adapterState = await FlutterBluePlus.adapterState.first;
+    if (adapterState != BluetoothAdapterState.on) {
+      const msg = '手机蓝牙没开：请打开蓝牙后再点扫描';
+      _log(msg);
+      _setState(BleCgmState.error);
+      return msg;
+    }
+    try {
+      await FlutterBluePlus.turnOn();
+    } catch (_) {}
+
     _setState(BleCgmState.scanning);
     _log('开始扫描…（AiDEX/微泰二代靠近手机即自动读数）');
+    _log('同时打开微泰 App 确认发射器在广播（能看到数值即正常）');
 
-    final services = _protocols
-        .expand((p) => p.serviceUuids)
-        .toSet()
-        .map((u) => Guid(u))
-        .toList();
-    await FlutterBluePlus.startScan(
-      withServices: services,
-      timeout: const Duration(seconds: 30),
-    );
+    // 3. 通配扫描：不过滤 service（部分手机过滤会漏广播），靠 matches() 判定
+    try {
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 60),
+      );
+    } catch (e) {
+      final msg = '启动扫描失败：$e';
+      _log(msg);
+      _setState(BleCgmState.error);
+      return msg;
+    }
 
     FlutterBluePlus.scanResults.listen((results) {
+      if (results.isEmpty) return;
+      _log('扫到 ${results.length} 个蓝牙设备，逐个识别…');
       for (final r in results) {
+        final advName = r.advertisementData.advName;
+        if (advName.isNotEmpty) _log('附近：$advName');
         for (final protocol in _protocols) {
           if (!protocol.matches(r)) continue;
           final name = r.advertisementData.advName.isEmpty
@@ -538,9 +573,13 @@ class BleCgmManager {
       }
     });
 
-    Future.delayed(const Duration(seconds: 31), () {
-      if (_state == BleCgmState.scanning) _setState(BleCgmState.idle);
+    Future.delayed(const Duration(seconds: 61), () {
+      if (_state == BleCgmState.scanning) {
+        _log('60 秒扫描结束：没识别到 CGM，请把日志里"附近："的设备名发过来');
+        _setState(BleCgmState.idle);
+      }
     });
+    return null;
   }
 
   Future<void> _connectToDevice(
