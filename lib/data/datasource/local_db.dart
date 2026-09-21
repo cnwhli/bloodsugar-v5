@@ -44,13 +44,24 @@ class AppDatabase {
     ''');
   }
 
-  /// 插入读数
+  /// 插入读数（BLE / 广播 / 手动通用）
   Future<int> insertReading(GlucoseReading reading) async {
     return _db!.insert('glucose_readings', {
       'value_mmol_l': reading.valueMmolL,
       'trend': reading.trend,
       'brand': reading.brand.displayName,
       'source': 'ble',
+    });
+  }
+
+  /// 插入手动读数（指血 / 其他 App 抄录）
+  Future<int> insertManual(double mmolL, {String? notes}) async {
+    return _db!.insert('glucose_readings', {
+      'value_mmol_l': mmolL,
+      'trend': 0,
+      'brand': '手动输入',
+      'source': 'manual',
+      'notes': notes,
     });
   }
 

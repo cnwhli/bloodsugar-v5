@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
-import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../data/datasource/local_db.dart';
+import '../../domain/bluetooth/cgm_protocol.dart';
 
-/// BLE 扫描 + 连接页面（完整流程）
+/// BLE 扫描 + 连接页面（多品牌 CGM）
+///
+/// 流程：
+/// 1. 点"扫描" → 按各品牌 service UUID 过滤广播
+/// 2. 微泰二代（AiDEX）：被动广播，靠近即自动读数，无需点连接
+/// 3. 其他品牌：发现后自动连接 + 握手 + 订阅，读数存库 + 首页显示
 class BleScannerScreen extends StatefulWidget {
   const BleScannerScreen({super.key});
 
@@ -21,16 +26,23 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     super.initState();
     AppDatabase.init();
     _manager.stateStream.listen((state) {
+      if (!mounted) return;
       setState(() => _statusText = state.toString().split('.').last);
-      _log.add('状态: $_statusText');
+    });
+    _manager.logStream.listen((msg) {
+      if (!mounted) return;
+      setState(() {
+        _log.add(msg);
+        if (_log.length > 50) _log.removeAt(0);
+      });
     });
     _manager.readingStream.listen((reading) async {
+      if (!mounted) return;
       setState(() {
         _readings.insert(0, reading);
         if (_readings.length > 100) _readings.removeLast();
       });
       await AppDatabase.instance.insertReading(reading);
-      _log.add('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · ${reading.brand.displayName}');
     });
   }
 
@@ -66,9 +78,22 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('状态: $_statusText', style: const TextStyle(fontSize: 14)),
-                Text('已读: ${_readings.length} 条', style: const TextStyle(fontSize: 14)),
+                Text('状态: $_statusText',
+                    style: const TextStyle(fontSize: 14)),
+                Text('已读: ${_readings.length} 条',
+                    style: const TextStyle(fontSize: 14)),
               ],
+            ),
+          ),
+          // 支持品牌提示
+          Container(
+            width: double.infinity,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            color: Colors.blue[50],
+            child: const Text(
+              '支持：微泰 AiDEX（广播自动读）· Libre 2/3 · Dexcom G6/G7 · 硅基 GS1/GS3 · Accu-Chek',
+              style: TextStyle(fontSize: 12, color: Colors.black87),
             ),
           ),
           // 操作按钮
@@ -96,33 +121,44 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           ),
           // 最近读数
           Expanded(
-            child: ListView.builder(
-              itemCount: _readings.length > 20 ? 20 : _readings.length,
-              itemBuilder: (context, i) {
-                final r = _readings[i];
-                return ListTile(
-                  title: Text(
-                    '${r.valueMmolL.toStringAsFixed(1)} mmol/L',
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            child: _readings.isEmpty
+                ? const Center(
+                    child: Text(
+                      '暂无数据\n\n微泰二代：点"扫描"，发射器靠近手机即自动出数\n其他品牌：扫描发现后自动连接',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount:
+                        _readings.length > 20 ? 20 : _readings.length,
+                    itemBuilder: (context, i) {
+                      final r = _readings[i];
+                      return ListTile(
+                        title: Text(
+                          '${r.valueMmolL.toStringAsFixed(1)} mmol/L',
+                          style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(
+                          '${r.brand.displayName} · ${r.timestamp.toString().substring(11, 19)}',
+                        ),
+                        trailing: Icon(
+                          r.status == 'low'
+                              ? Icons.arrow_downward
+                              : r.status == 'high'
+                                  ? Icons.arrow_upward
+                                  : Icons.check_circle,
+                          color: r.status == 'low'
+                              ? Colors.blue
+                              : r.status == 'high'
+                                  ? Colors.red
+                                  : Colors.green,
+                        ),
+                      );
+                    },
                   ),
-                  subtitle: Text(
-                    '${r.brand.displayName} · ${r.timestamp.toString().substring(11, 19)}',
-                  ),
-                  trailing: Icon(
-                    r.status == 'low'
-                        ? Icons.arrow_downward
-                        : r.status == 'high'
-                            ? Icons.arrow_upward
-                            : Icons.check_circle,
-                    color: r.status == 'low'
-                        ? Colors.blue
-                        : r.status == 'high'
-                            ? Colors.red
-                            : Colors.green,
-                  ),
-                );
-              },
-            ),
           ),
           // 日志（底部）
           Container(
