@@ -316,7 +316,7 @@
     },
     {
       "name": "meta",
-      "version": "1.19.0",
+      "version": "1.18.3",
       "dependencies": []
     },
     {
@@ -705,7 +705,7 @@
     },
     {
       "name": "vector_math",
-      "version": "2.4.3",
+      "version": "2.4.0",
       "dependencies": []
     },
     {
@@ -1194,7 +1194,7 @@
     },
     {
       "name": "objective_c",
-      "version": "9.6.0",
+      "version": "9.5.0",
       "dependencies": [
         "code_assets",
         "collection",
@@ -1461,11 +1461,12 @@
     },
     {
       "name": "hooks",
-      "version": "2.2.0",
+      "version": "2.0.2",
       "dependencies": [
         "collection",
         "crypto",
         "logging",
+        "meta",
         "pub_semver",
         "record_use",
         "yaml"
@@ -1473,11 +1474,10 @@
     },
     {
       "name": "code_assets",
-      "version": "2.1.0",
+      "version": "1.2.1",
       "dependencies": [
         "collection",
-        "hooks",
-        "logging"
+        "hooks"
       ]
     },
     {
@@ -1517,7 +1517,7 @@
     },
     {
       "name": "record_use",
-      "version": "1.1.1",
+      "version": "0.6.0",
       "dependencies": [
         "collection",
         "meta",
