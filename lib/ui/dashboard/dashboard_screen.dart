@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../data/datasource/local_db.dart';
+import '../../data/datasource/local_db.dart';
 
 /// 首页仪表盘
 /// 血糖圆环 + 趋势 + 快捷操作
@@ -64,7 +64,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // 血糖圆环
             CircleAvatar(
               radius: 80,
-              backgroundColor: _statusColor.withOpacity(0.15),
+              backgroundColor: _statusColor.withValues(alpha: 0.15),
               child: Center(
                 child: Text(
                   _currentGlucose > 0

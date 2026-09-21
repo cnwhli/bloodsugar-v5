@@ -9,11 +9,6 @@
 //   3. 数据渲染：Canvas 绘制
 //   4. 实时同步：Supabase Realtime（WebSocket）
 
-import 'package:flutter/material.dart';
-
-// ignore: unused_import
-import '../multi_watch_arch.dart';
-
 /// 华为 Watch Face 配置
 class HuaweiWatchFace {
   /// HarmonyOS 表盘

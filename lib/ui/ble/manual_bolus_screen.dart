@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import '../domain/bluetooth/pump_protocol.dart';
-import '../domain/bluetooth/pump_pairing.dart';
+import '../../domain/bluetooth/pump_pairing.dart';
 
 /// 手动给药指令页面
 ///

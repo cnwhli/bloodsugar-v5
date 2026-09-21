@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../domain/bluetooth/cgm_protocol.dart';
 
 /// 糖友社区模块
 ///
@@ -151,9 +150,9 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
         child: Column(
           children: [
             // 当前血糖快照（可选）
-            if (widget.currentGlucose > 0)
+            if (widget.currentGlucose != null && widget.currentGlucose! > 0)
               Chip(
-                label: Text('当前血糖: ${widget.currentGlucose.toStringAsFixed(1)} mmol/L'),
+                label: Text('当前血糖: ${widget.currentGlucose!.toStringAsFixed(1)} mmol/L'),
                 deleteIcon: const Icon(Icons.close),
                 onDeleted: () {},
               ),

@@ -17,17 +17,40 @@
 ///   5: DoubleUp (↗↗)
 ///   6: DoubleDown (↘↘)
 
-import '../cgm_protocol.dart';
+import 'dart:typed_data';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'cgm_protocol.dart';
 
 /// Medtronic Guardian 4 / Simplera 协议实现
 class MedtronicCgmProtocol extends CgmProtocol {
   MedtronicCgmProtocol();
 
   @override
-  String get brand => 'medtronic';
+  String get servicePrefix => '0x3001';
 
   @override
-  List<String> get supportedModels => ['Guardian 4', 'Simplera', 'Guardian 3'];
+  List<String> get subscriptionUuids => [
+        '00002a18-0000-1000-8000-00805f9b34fb', // Battery
+        '0000ffe1-0000-1000-8000-00805f9b34fb', // Medtronic Data
+      ];
+
+  @override
+  bool matches(BluetoothDevice device) =>
+      device.name?.toLowerCase().contains('medtronic') ?? false;
+
+  @override
+  Future<GlucoseReading> parseReading(Uint8List data) async {
+    // Medtronic 解析：偏移 4-5 字节血糖值 (mg/dL)
+    final raw = (data[4] << 8) | data[5];
+    final mgDl = raw * 0.05; // 每单位 0.05 mg/dL
+    final trendByte = data[6] & 0x0F;
+    return GlucoseReading(
+      valueMgDl: mgDl,
+      timestamp: DateTime.now(),
+      trend: trendMap[trendByte] ?? 0,
+      brand: CgmBrand.medtronicGuardian4,
+    );
+  }
 
   @override
   bool get isEncrypted => true; // Medtronic 使用 AES-128 加密
@@ -43,57 +66,16 @@ class MedtronicCgmProtocol extends CgmProtocol {
 
   @override
   Future<GlucoseReading> read() async {
-    // 从 BLE 订阅解析 Medtronic 数据包
-    // final packet = await _readPacket();
-    // return _parsePacket(packet);
     throw UnimplementedError('read 需配对后使用');
   }
 
   @override
   Stream<GlucoseReading> subscribe() {
-    // 实时流式血糖数据
     throw UnimplementedError('subscribe 需配对后使用');
-  }
-
-  /// 解析 Medtronic 数据包
-  GlucoseReading _parsePacket(List<int> packet) {
-    // 解析逻辑：
-    // byte 0-2: 同步头
-    // byte 3: command
-    // byte 4-5: glucose value (mg/dL)
-    // byte 6: trend
-    // byte 7-10: timestamp
-    // byte 11-12: CRC8
-
-    final glucoseMgDl = (packet[4] << 8) | packet[5];
-    final mmolL = glucoseMgDl / 18.0;
-    final trend = _mapTrend(packet[6]);
-
-    return GlucoseReading(
-      valueMmolL: mmolL,
-      trend: trend,
-      timestamp: DateTime.now(),
-      brand: CgmBrand.medtronic,
-    );
-  }
-
-  /// 趋势映射（来自 cgmpatches）
-  int _mapTrend(int raw) {
-    switch (raw) {
-      case 0: return 0; // Flat
-      case 1: return 1; // FortyFiveUp
-      case 2: return 2; // SingleUp
-      case 3: return 3; // FortyFiveDown
-      case 4: return 4; // SingleDown
-      case 5: return 5; // DoubleUp
-      case 6: return 6; // DoubleDown
-      default: return 0;
-    }
   }
 
   /// 电池状态
   Future<int> getBatteryLevel() async {
-    // 发送 battery command，解析响应
     throw UnimplementedError('battery 需配对后使用');
   }
 }

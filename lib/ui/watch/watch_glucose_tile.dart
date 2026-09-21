@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'watch_app.dart';
 
 /// 手表端血糖展示小组件
 class WatchGlucoseTile extends StatelessWidget {
@@ -19,7 +18,7 @@ class WatchGlucoseTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: statusColor.withOpacity(0.15),
+        color: statusColor.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(

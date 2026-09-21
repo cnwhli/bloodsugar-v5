@@ -12,7 +12,6 @@ class BleScannerScreen extends StatefulWidget {
 
 class _BleScannerScreenState extends State<BleScannerScreen> {
   final _manager = BleCgmManager();
-  final _db = AppDatabase();
   List<GlucoseReading> _readings = [];
   String _statusText = '就绪';
   List<String> _log = [];
@@ -20,7 +19,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   @override
   void initState() {
     super.initState();
-    _db.init();
+    AppDatabase.init();
     _manager.stateStream.listen((state) {
       setState(() => _statusText = state.toString().split('.').last);
       _log.add('状态: $_statusText');
@@ -30,7 +29,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         _readings.insert(0, reading);
         if (_readings.length > 100) _readings.removeLast();
       });
-      await _db.insertReading(reading);
+      await AppDatabase.instance.insertReading(reading);
       _log.add('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · ${reading.brand.displayName}');
     });
   }
@@ -135,7 +134,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
             ),
             child: ListView(
               children: _log
-                  .takeLast(10)
+                  .sublist(_log.length > 10 ? _log.length - 10 : 0)
                   .map((l) => Text(l, style: const TextStyle(fontSize: 11)))
                   .toList(),
             ),

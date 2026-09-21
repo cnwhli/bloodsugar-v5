@@ -8,6 +8,7 @@ import 'package:bloodsugar_v5/ui/chat/chat_screen.dart';
 import 'package:bloodsugar_v5/ui/community/community_feed_screen.dart';
 import 'package:bloodsugar_v5/ui/profile/profile_screen.dart';
 import 'package:bloodsugar_v5/services/rag_service.dart';
+import 'package:bloodsugar_v5/domain/bluetooth/pump_pairing.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,14 +50,12 @@ class AppTheme {
     ),
     useMaterial3: true,
     fontFamily: 'PingFang SC',
-    // 圆角主题
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
       ),
     ),
-    // 按钮主题
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         shape: RoundedRectangleBorder(
@@ -65,11 +64,6 @@ class AppTheme {
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       ),
     ),
-    // 页面过渡动画
-    pageTransitionsTheme: const PageTransitionsTheme(builders: {
-      TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-    }),
   );
 
   static ThemeData darkTheme = ThemeData(
@@ -79,7 +73,7 @@ class AppTheme {
     ),
     useMaterial3: true,
     fontFamily: 'PingFang SC',
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -93,10 +87,6 @@ class AppTheme {
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       ),
     ),
-    pageTransitionsTheme: const PageTransitionsTheme(builders: {
-      TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-    }),
   );
 }
 

@@ -14,20 +14,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'pump_pairing.dart';
 
-/// 泵品牌枚举
-enum PumpBrand {
-  danaR('Dana-R', '0xF001'),
-  danaRS('Dana-RS', '0xF002'),
-  omniPod('OmniPod', '0xF003'),
-  medtronic('Medtronic', '0xF004'),
-  tandem('Tandem', '0xF005'),
-  unknown('Unknown', '0x0000');
-
-  final String displayName;
-  final String servicePrefix;
-  const PumpBrand(this.displayName, this.servicePrefix);
-}
+/// 泵品牌枚举（在 pump_pairing.dart 中定义）
 
 /// 泵状态
 class PumpStatus {
@@ -192,7 +181,7 @@ class PumpManager {
   /// 扫描泵设备
   void startScan() {
     FlutterBluePlus.startScan(
-      withServices: _protocols.map((p) => p.servicePrefix).toList(),
+      withServices: _protocols.map((p) => Guid(p.servicePrefix)).toList(),
     );
     FlutterBluePlus.scanResults.listen((results) {
       for (final r in results) {

@@ -71,6 +71,17 @@ abstract class CgmProtocol {
   bool matches(BluetoothDevice device);
 }
 
+/// 趋势映射（来自 cgmpatches）
+const Map<int, int> trendMap = {
+  0: 0, // Flat
+  1: 1, // FortyFiveUp
+  2: 2, // SingleUp
+  3: 3, // FortyFiveDown
+  4: 4, // SingleDown
+  5: 5, // DoubleUp
+  6: 6, // DoubleDown
+};
+
 /// Libre 2 协议实现
 class Libre2Protocol implements CgmProtocol {
   @override
@@ -192,8 +203,7 @@ class BleCgmManager {
     _stateController.add(_state);
 
     FlutterBluePlus.startScan(
-      withServices: _protocols.map((p) => p.servicePrefix).toList(),
-      scanMode: ScanMode.lowLatency,
+      withServices: _protocols.map((p) => Guid(p.servicePrefix)).toList(),
     );
 
     FlutterBluePlus.scanResults.listen((results) {
@@ -234,7 +244,7 @@ class BleCgmManager {
               .contains(characteristic.uuid.toString())) {
             await characteristic.setNotifyValue(true);
             characteristic.value.listen((data) async {
-              final reading = await protocol.parseReading(data);
+              final reading = await protocol.parseReading(Uint8List.fromList(data));
               _readingController.add(reading);
             });
           }

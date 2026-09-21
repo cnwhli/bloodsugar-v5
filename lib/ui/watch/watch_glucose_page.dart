@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:bloodsugar_v5/domain/bluetooth/cgm_protocol.dart';
+import '../../domain/bluetooth/cgm_protocol.dart';
 import '../watch/multi_watch_arch.dart';
 
 /// 手表端血糖页面
@@ -66,39 +66,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
   }
 
   void _checkAlerts(GlucoseReading reading) {
-    final isLow = WatchApp.isLow(reading.valueMmolL);
-    final isHigh = WatchApp.isHigh(reading.valueMmolL);
-
-    if (isLow || isHigh) {
-      _triggerAlert(isLow: isLow, isHigh: isHigh);
-    }
-
-    setState(() {
-      _mmolL = reading.valueMmolL;
-      _trend = reading.trend;
-      _brand = reading.brand.displayName;
-      _updatedAt = reading.timestamp;
-      _lowAlert = isLow;
-      _highAlert = isHigh;
-    });
-  }
-
-  Future<void> _triggerAlert({required bool isLow, required bool isHigh}) async {
-    // 震动模式
-    const lowPattern = [500, 200, 500, 200, 500]; // 三短震
-    const highPattern = [1000, 200, 1000]; // 两长震
-
-    if (isLow) {
-      HapticFeedback.heavyImpact();
-      await Future.delayed(const Duration(milliseconds: 500));
-      HapticFeedback.heavyImpact();
-      await Future.delayed(const Duration(milliseconds: 200));
-      HapticFeedback.heavyImpact();
-    } else if (isHigh) {
-      HapticFeedback.mediumImpact();
-      await Future.delayed(const Duration(milliseconds: 1000));
-      HapticFeedback.mediumImpact();
-    }
+    // 预警检查（由 AlertService 处理）
   }
 
   @override
@@ -137,7 +105,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
             ),
             child: Text(
               _lowAlert ? '⚠️ 低血糖' : '⚠️ 高血糖',
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white,
                 fontSize: widget.shape.isCircular ? 14 : 20,
                 fontWeight: FontWeight.bold,
@@ -160,7 +128,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
           _mmolL > 0
               ? '${(_mmolL * 18.0182).toStringAsFixed(0)} mg/dL'
               : '',
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: widget.shape.isCircular ? 12 : 16,
             color: Colors.grey,
           ),
@@ -176,7 +144,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
         const SizedBox(height: 4),
         Text(
           _brand,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: widget.shape.isCircular ? 10 : 12,
             color: Colors.grey,
           ),
@@ -184,7 +152,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
         const SizedBox(height: 4),
         Text(
           '${_updatedAt.hour}:${_updatedAt.minute}',
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: widget.shape.isCircular ? 10 : 12,
             color: Colors.grey,
           ),

@@ -1,39 +1,33 @@
-import 'package:flutter/material.dart';
-import 'package:drift/drift.dart';
-import 'package:drift_sqflite/sqflite.dart';
-import 'package:path_provider/path_provider.dart';
-import '../domain/bluetooth/cgm_protocol.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart' as p;
+import '../../domain/bluetooth/cgm_protocol.dart';
 
-/// 本地数据库（drift SQLite）
+/// 本地数据库（sqflite）
 class AppDatabase {
   static AppDatabase? _instance;
-  late final Connection _conn;
+  static Database? _db;
 
   AppDatabase._();
 
   static Future<AppDatabase> init() async {
     _instance ??= AppDatabase._();
-    final dbPath = await getApplicationDocumentsDirectory();
-    _instance!._conn = await databaseFactorySqflite.open(
-      '${dbPath.path}/bloodsugar.db',
-      options: const OpenDatabaseOptions(
-        maxOpenConnections: 1,
-        version: 1,
-        onCreate: _createTables,
-      ),
+    await _instance!._open();
+    return _instance!;
+  }
+
+  static AppDatabase get instance => _instance!;
+
+  Future<void> _open() async {
+    final dbPath = await getDatabasesPath();
+    _db = await openDatabase(
+      p.join(dbPath, 'bloodsugar.db'),
+      version: 1,
+      onCreate: _createTables,
     );
-    return _instance!;
   }
 
-  static AppDatabase get instance {
-    if (_instance == null) {
-      throw StateError('AppDatabase 未初始化，请先调用 AppDatabase.init()');
-    }
-    return _instance!;
-  }
-
-  static Future<void> _createTables(DatabaseExecutor e, int version) async {
-    await e.execute('''
+  static Future<void> _createTables(Database db, int version) async {
+    await db.execute('''
       CREATE TABLE glucose_readings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         value_mmol_l REAL NOT NULL,
@@ -45,36 +39,33 @@ class AppDatabase {
         created_at TEXT DEFAULT (datetime('now','localtime'))
       )
     ''');
-    await e.execute('''
+    await db.execute('''
       CREATE INDEX idx_glucose_time ON glucose_readings(created_at DESC)
     ''');
   }
 
   /// 插入读数
   Future<int> insertReading(GlucoseReading reading) async {
-    final stmt = await _conn.prepare(
-      'INSERT INTO glucose_readings (value_mmol_l, trend, brand, source) VALUES (?, ?, ?, ?)',
-    );
-    return stmt.execute([
-      reading.valueMmolL,
-      reading.trend,
-      reading.brand.displayName,
-      'ble',
-    ]);
+    return _db!.insert('glucose_readings', {
+      'value_mmol_l': reading.valueMmolL,
+      'trend': reading.trend,
+      'brand': reading.brand.displayName,
+      'source': 'ble',
+    });
   }
 
   /// 最近 N 条
   Future<List<Map<String, dynamic>>> recentReadings({int limit = 100}) async {
-    final result = await _conn.customSelect(
-      'SELECT * FROM glucose_readings ORDER BY created_at DESC LIMIT ?',
-      variables: [Variable(limit)],
+    return _db!.query(
+      'glucose_readings',
+      orderBy: 'created_at DESC',
+      limit: limit,
     );
-    return result.map((r) => r.data).toList();
   }
 
   /// 周统计
   Future<Map<String, dynamic>> weeklyStats() async {
-    final result = await _conn.customSelect('''
+    final result = await _db!.rawQuery('''
       SELECT
         COUNT(*) as total,
         AVG(value_mmol_l) as avg,
@@ -85,13 +76,13 @@ class AppDatabase {
       WHERE created_at >= datetime('now', '-7 days')
     ''');
     if (result.isEmpty) return {};
-    final row = result.first.data;
+    final row = result.first;
     return {
       'total': row['total'],
       'avg': row['avg'],
       'min': row['min_v'],
       'max': row['max_v'],
-      'tir': row['tir']?.toStringAsFixed(1) ?? '--',
+      'tir': (row['tir'] as double?)?.toStringAsFixed(1) ?? '--',
     };
   }
 }

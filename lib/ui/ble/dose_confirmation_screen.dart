@@ -1,5 +1,19 @@
 import 'package:flutter/material.dart';
-import '../../domain/bluetooth/pump_protocol.dart';
+
+/// 剂量建议
+class DoseSuggestion {
+  final double bolusUnits;
+  final String reason;
+  final bool safe;
+  final String safetyNote;
+
+  DoseSuggestion({
+    required this.bolusUnits,
+    required this.reason,
+    required this.safe,
+    required this.safetyNote,
+  });
+}
 
 /// 半闭环剂量确认页面
 /// 安全边界：App 计算 → 弹窗确认 → 用户手动执行

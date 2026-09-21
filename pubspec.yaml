@@ -17,9 +17,9 @@ dependencies:
   # 后端 (Supabase 免费)
   supabase_flutter: ^2.5.0
 
-  # 跨平台
-  drift: ^2.13.0        # 本地 SQLite
-  drift_sqflite: ^2.3.0
+  # 数据库
+  sqflite: ^2.3.0
+  path_provider: ^2.1.2
 
   # 状态管理
   riverpod: ^2.5.0
@@ -33,7 +33,6 @@ dependencies:
   # 工具
   intl: ^0.19.0
   uuid: ^4.3.0
-  path_provider: ^2.1.2
   permission_handler: ^11.3.0
 
 dev_dependencies:

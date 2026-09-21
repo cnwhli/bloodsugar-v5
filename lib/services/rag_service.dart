@@ -106,12 +106,12 @@ class AiHealthAssistantScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('AI 健康助手'),
         actions: [
-          if (currentGlucose > 0)
+          if (currentGlucose != null && currentGlucose! > 0)
             Padding(
               padding: const EdgeInsets.only(right: 12),
               child: Center(
                 child: Text(
-                  '血糖: ${currentGlucose.toStringAsFixed(1)}',
+                  '血糖: ${currentGlucose!.toStringAsFixed(1)}',
                   style: const TextStyle(fontSize: 14),
                 ),
               ),
