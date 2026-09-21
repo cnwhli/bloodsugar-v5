@@ -21,8 +21,33 @@ class AppDatabase {
     final dbPath = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dbPath, 'bloodsugar.db'),
-      version: 1,
+      version: 3,
       onCreate: _createTables,
+      onUpgrade: (db, oldV, newV) async {
+        if (oldV < 2) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS community_posts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_name TEXT DEFAULT '糖友',
+              content TEXT NOT NULL,
+              glucose_mmol_l REAL,
+              tag TEXT,
+              likes INT DEFAULT 0,
+              created_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+          ''');
+        }
+        if (oldV < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS pump_devices (
+              device_id TEXT PRIMARY KEY,
+              brand TEXT,
+              device_name TEXT,
+              paired_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+          ''');
+        }
+      },
     );
   }
 
@@ -41,6 +66,25 @@ class AppDatabase {
     ''');
     await db.execute('''
       CREATE INDEX idx_glucose_time ON glucose_readings(created_at DESC)
+    ''');
+    await db.execute('''
+      CREATE TABLE community_posts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_name TEXT DEFAULT '糖友',
+        content TEXT NOT NULL,
+        glucose_mmol_l REAL,
+        tag TEXT,
+        likes INT DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE pump_devices (
+        device_id TEXT PRIMARY KEY,
+        brand TEXT,
+        device_name TEXT,
+        paired_at TEXT DEFAULT (datetime('now','localtime'))
+      )
     ''');
   }
 
@@ -95,5 +139,66 @@ class AppDatabase {
       'max': row['max_v'],
       'tir': (row['tir'] as double?)?.toStringAsFixed(1) ?? '--',
     };
+  }
+
+  // ==================== 社区（本地单机版）====================
+
+  Future<int> insertPost({
+    required String userName,
+    required String content,
+    double? glucoseMmolL,
+    String? tag,
+  }) async {
+    return _db!.insert('community_posts', {
+      'user_name': userName,
+      'content': content,
+      'glucose_mmol_l': glucoseMmolL,
+      'tag': tag,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> recentPosts({int limit = 20}) async {
+    return _db!.query(
+      'community_posts',
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+  }
+
+  Future<void> likePost(int id) async {
+    await _db!.rawUpdate(
+      'UPDATE community_posts SET likes = likes + 1 WHERE id = ?',
+      [id],
+    );
+  }
+
+  // ==================== 泵配对记录 ====================
+
+  Future<void> savePumpPairing({
+    required String brand,
+    required String deviceId,
+    required String deviceName,
+  }) async {
+    await _db!.insert(
+      'pump_devices',
+      {
+        'brand': brand,
+        'device_id': deviceId,
+        'device_name': deviceName,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> pairedPumps() async {
+    return _db!.query('pump_devices', orderBy: 'paired_at DESC');
+  }
+
+  Future<void> deletePumpPairing(String deviceId) async {
+    await _db!.delete(
+      'pump_devices',
+      where: 'device_id = ?',
+      whereArgs: [deviceId],
+    );
   }
 }

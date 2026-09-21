@@ -1,17 +1,5 @@
 import 'package:flutter/material.dart';
-
-/// 糖友社区模块
-///
-/// 功能：
-/// - 动态发布（文字 + 血糖快照）
-/// - 评论 + 点赞
-/// - 糖友关注
-/// - 经验分享标签
-///
-/// 安全规范：
-/// - 不提供医疗建议
-/// - 每条动态底部自动追加免责声明
-/// - 急症关键词自动提示就医
+import '../../data/datasource/local_db.dart';
 
 /// 社区动态
 class CommunityPost {
@@ -37,6 +25,29 @@ class CommunityPost {
     required this.createdAt,
   });
 
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'user_name': userName,
+        'content': content,
+        'glucose_mmol_l': glucoseMmolL,
+        'tag': tag,
+        'likes': likes,
+        'created_at': createdAt.toIso8601String(),
+      };
+
+  static CommunityPost fromMap(Map<String, dynamic> m) => CommunityPost(
+        id: m['id'].toString(),
+        userId: m['id'].toString(),
+        userName: m['user_name']?.toString() ?? '糖友',
+        content: m['content']?.toString() ?? '',
+        glucoseMmolL: (m['glucose_mmol_l'] as num?)?.toDouble(),
+        tag: m['tag']?.toString(),
+        likes: (m['likes'] as num?)?.toInt() ?? 0,
+        likedBy: const [],
+        createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '') ??
+            DateTime.now(),
+      );
+
   CommunityPost copyWith({int? likes, List<String>? likedBy}) {
     return CommunityPost(
       id: id,
@@ -52,7 +63,9 @@ class CommunityPost {
   }
 }
 
-/// 社区服务
+/// 社区服务：本地 sqflite 存储（单机版）。
+/// 联网版（Supabase 多人社区）为二期：publishPost/getFeed 保持同样签名，
+/// 到时把 db 换成 Supabase 调用即可，UI 不用改。
 class CommunityService {
   static final CommunityService _instance = CommunityService._internal();
   factory CommunityService() => _instance;
@@ -66,54 +79,129 @@ class CommunityService {
     double? glucoseMmolL,
     String? tag,
   }) async {
-    // Supabase 插入
-    // const response = await Supabase.instance.client
-    //     .from('community_posts')
-    //     .insert({
-    //       'user_id': userId,
-    //       'user_name': userName,
-    //       'content': content,
-    //       'glucose_mmol_l': glucoseMmolL,
-    //       'tag': tag,
-    //     })
-    //     .select()
-    //     .single();
-    // return response['id'];
-    throw UnimplementedError('publishPost 需配置 Supabase');
+    await AppDatabase.init();
+    final id = await AppDatabase.instance.insertPost(
+      userName: userName,
+      content: content,
+      glucoseMmolL: glucoseMmolL,
+      tag: tag,
+    );
+    return id.toString();
   }
 
-  /// 点赞
+  /// 点赞（本地 +1）
   Future<void> likePost(String postId, String userId) async {
-    // Supabase 更新 likedBy 数组
-    throw UnimplementedError('likePost 需配置 Supabase');
+    await AppDatabase.init();
+    await AppDatabase.instance.likePost(int.parse(postId));
   }
 
   /// 获取动态列表
   Future<List<CommunityPost>> getFeed({int limit = 20}) async {
-    // Supabase 查询
-    // final response = await Supabase.instance.client
-    //     .from('community_posts')
-    //     .select()
-    //     .order('created_at', ascending: false)
-    //     .limit(limit);
-    // return (response as List)
-    //     .map((row) => CommunityPost.fromJson(row))
-    //     .toList();
-    throw UnimplementedError('getFeed 需配置 Supabase');
+    await AppDatabase.init();
+    final rows = await AppDatabase.instance.recentPosts(limit: limit);
+    return rows.map(CommunityPost.fromMap).toList();
   }
 }
 
 /// 社区动态 UI
-class CommunityFeedScreen extends StatelessWidget {
+class CommunityFeedScreen extends StatefulWidget {
   const CommunityFeedScreen({super.key});
+
+  @override
+  State<CommunityFeedScreen> createState() => _CommunityFeedScreenState();
+}
+
+class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
+  List<CommunityPost> _posts = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final posts = await CommunityService().getFeed();
+      if (!mounted) return;
+      setState(() {
+        _posts = posts;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _like(CommunityPost p) async {
+    await CommunityService().likePost(p.id, 'me');
+    _load();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('糖友社区')),
-      body: const Center(
-        child: Text('社区功能待 Supabase 配置'),
+      floatingActionButton: FloatingActionButton(
+        child: const Icon(Icons.add),
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const PostComposerScreen()),
+        ).then((_) => _load()),
       ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _posts.isEmpty
+              ? const Center(
+                  child: Text('还没有动态，点右下角发布第一条吧',
+                      style: TextStyle(color: Colors.grey)),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.builder(
+                    itemCount: _posts.length,
+                    itemBuilder: (context, i) {
+                      final p = _posts[i];
+                      return Card(
+                        margin: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        child: ListTile(
+                          title: Text(
+                              '${p.userName}${p.tag != null ? ' · ${p.tag}' : ''}'),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              Text(p.content),
+                              if (p.glucoseMmolL != null)
+                                Chip(
+                                  label: Text(
+                                      '血糖 ${p.glucoseMmolL!.toStringAsFixed(1)} mmol/L'),
+                                ),
+                              Text(
+                                p.createdAt.toString().substring(0, 16),
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                          trailing: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              InkWell(
+                                onTap: () => _like(p),
+                                child: const Icon(Icons.favorite_border),
+                              ),
+                              Text('${p.likes}'),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
     );
   }
 }
@@ -131,6 +219,7 @@ class PostComposerScreen extends StatefulWidget {
 class _PostComposerScreenState extends State<PostComposerScreen> {
   final _controller = TextEditingController();
   String? _selectedTag;
+  double? _glucose;
 
   static const List<String> tags = [
     '饮食',
@@ -142,6 +231,44 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _glucose = widget.currentGlucose;
+    if (_glucose == null) {
+      AppDatabase.init().then((_) async {
+        try {
+          final rows =
+              await AppDatabase.instance.recentReadings(limit: 1);
+          if (!mounted) return;
+          if (rows.isNotEmpty) {
+            setState(() => _glucose =
+                (rows.first['value_mmol_l'] as num?)?.toDouble());
+          }
+        } catch (_) {}
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _publish() async {
+    if (_controller.text.trim().isEmpty) return;
+    await CommunityService().publishPost(
+      userId: 'me',
+      userName: '糖友',
+      content: _controller.text.trim(),
+      glucoseMmolL: _glucose,
+      tag: _selectedTag,
+    );
+    if (!mounted) return;
+    Navigator.pop(context);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('发布动态')),
@@ -150,11 +277,12 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
         child: Column(
           children: [
             // 当前血糖快照（可选）
-            if (widget.currentGlucose != null && widget.currentGlucose! > 0)
+            if (_glucose != null && _glucose! > 0)
               Chip(
-                label: Text('当前血糖: ${widget.currentGlucose!.toStringAsFixed(1)} mmol/L'),
-                deleteIcon: const Icon(Icons.close),
-                onDeleted: () {},
+                label: Text(
+                    '当前血糖: ${_glucose!.toStringAsFixed(1)} mmol/L'),
+                deleteIcon: const Icon(Icons.close, size: 18),
+                onDeleted: () => setState(() => _glucose = null),
               ),
             const SizedBox(height: 12),
             // 标签选择
@@ -164,7 +292,8 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                   .map((t) => FilterChip(
                         label: Text(t),
                         selected: _selectedTag == t,
-                        onSelected: (_) => setState(() => _selectedTag = t),
+                        onSelected: (_) =>
+                            setState(() => _selectedTag = t),
                       ))
                   .toList(),
             ),
@@ -186,12 +315,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton(
-              onPressed: () {
-                if (_controller.text.isNotEmpty) {
-                  // CommunityService().publishPost(...)
-                  Navigator.pop(context);
-                }
-              },
+              onPressed: _publish,
               child: const Text('发布'),
             ),
           ],

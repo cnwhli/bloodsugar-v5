@@ -19,6 +19,8 @@
 ///   - 更换泵需重新配对
 
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../data/datasource/local_db.dart';
 
 /// 泵品牌枚举
 enum PumpBrand {
@@ -66,35 +68,60 @@ class PumpPairing {
 }
 
 /// 泵密钥管理
-/// 密钥存储在设备安全存储中，不上传 Supabase
+/// 密钥存设备安全存储（Keychain / Keystore），配对记录存本地库，不上传云端
 class PumpKeyManager {
   static final PumpKeyManager _instance = PumpKeyManager._internal();
   factory PumpKeyManager() => _instance;
   PumpKeyManager._internal();
 
-  /// 获取存储的泵密钥（安全存储）
-  /// 实际实现使用 flutter_secure_storage
+  static const _storage = FlutterSecureStorage();
+
+  /// 获取存储的泵密钥
   Future<String?> getKey(String deviceId) async {
-    // flutter_secure_storage.read(key: 'pump_key_$deviceId');
-    throw UnimplementedError('getKey 需配置 flutter_secure_storage');
+    return _storage.read(key: 'pump_key_$deviceId');
   }
 
   /// 存储泵密钥
   Future<void> saveKey(String deviceId, String key) async {
-    // flutter_secure_storage.write(key: 'pump_key_$deviceId', value: key);
-    throw UnimplementedError('saveKey 需配置 flutter_secure_storage');
+    await _storage.write(key: 'pump_key_$deviceId', value: key);
   }
 
   /// 删除泵密钥（更换泵时调用）
   Future<void> deleteKey(String deviceId) async {
-    // flutter_secure_storage.delete(key: 'pump_key_$deviceId');
-    throw UnimplementedError('deleteKey 需配置 flutter_secure_storage');
+    await _storage.delete(key: 'pump_key_$deviceId');
   }
 
-  /// 列出已配对的泵
+  /// 列出已配对的泵（本地库 pump_devices 表）
   Future<List<PumpPairing>> listPaired() async {
-    // 从本地数据库读取已配对的泵
-    throw UnimplementedError('listPaired 需配置本地数据库');
+    try {
+      await AppDatabase.init();
+      final rows = await AppDatabase.instance.pairedPumps();
+      return rows
+          .map((r) => PumpPairing(
+                brand: PumpBrand.values.firstWhere(
+                  (b) => b.name == r['brand'],
+                  orElse: () => PumpBrand.danaR,
+                ),
+                deviceId: r['device_id'].toString(),
+                deviceName: r['device_name']?.toString() ?? '',
+                status: PumpPairStatus.paired,
+                pairedAt: DateTime.tryParse(
+                    r['paired_at']?.toString() ?? ''),
+              ))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// 保存配对记录
+  Future<void> savePairing(PumpPairing pairing) async {
+    await AppDatabase.init();
+    await AppDatabase.instance.savePumpPairing(
+      brand: pairing.brand.name,
+      deviceId: pairing.deviceId,
+      deviceName: pairing.deviceName,
+    );
   }
 }
 

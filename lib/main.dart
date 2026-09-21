@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:bloodsugar_v5/ui/dashboard/dashboard_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/ble_scanner_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/manual_entry_screen.dart';
+import 'package:bloodsugar_v5/ui/report/report_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/dose_confirmation_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/manual_bolus_screen.dart';
 import 'package:bloodsugar_v5/ui/chat/chat_screen.dart';
@@ -106,6 +107,7 @@ class BloodSugarApp extends StatelessWidget {
       routes: {
         '/ble': (context) => const BleScannerScreen(),
         '/add': (context) => const ManualEntryScreen(),
+        '/report': (context) => const ReportScreen(),
         '/dose': (context) => DoseConfirmationScreen(
               suggestion: DoseSuggestion(
                 bolusUnits: 0,
