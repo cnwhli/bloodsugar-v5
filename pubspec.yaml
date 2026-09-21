@@ -1,0 +1,47 @@
+name: bloodsugar_v5
+description: 动态血糖仪跨平台 App - 多品牌直连 + OPPO Watch + 免费糖友社区
+publish_to: 'none'
+version: 5.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # BLE
+  flutter_blue_plus: ^1.33.0
+
+  # 后端 (Supabase 免费)
+  supabase_flutter: ^2.5.0
+
+  # 跨平台
+  drift: ^2.13.0        # 本地 SQLite
+  drift_sqflite: ^2.3.0
+
+  # 状态管理
+  riverpod: ^2.5.0
+  riverpod_annotation: ^2.4.0
+
+  # UI
+  fluentui_system_icons: ^1.1.221
+  google_fonts: ^6.2.1
+  shimmer: ^3.0.0
+
+  # 工具
+  intl: ^0.19.0
+  uuid: ^4.3.0
+  path_provider: ^2.1.2
+  permission_handler: ^11.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  build_runner: ^2.4.11
+  riverpod_generator: ^2.4.0
+  custom_lint: ^0.6.0
+
+flutter:
+  uses-material-design: true

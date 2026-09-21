@@ -1,0 +1,168 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:bloodsugar_v5/ui/dashboard/dashboard_screen.dart';
+import 'package:bloodsugar_v5/ui/ble/ble_scanner_screen.dart';
+import 'package:bloodsugar_v5/ui/ble/dose_confirmation_screen.dart';
+import 'package:bloodsugar_v5/ui/ble/manual_bolus_screen.dart';
+import 'package:bloodsugar_v5/ui/chat/chat_screen.dart';
+import 'package:bloodsugar_v5/ui/community/community_feed_screen.dart';
+import 'package:bloodsugar_v5/ui/profile/profile_screen.dart';
+import 'package:bloodsugar_v5/services/rag_service.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  runApp(const BloodSugarApp());
+}
+
+/// 应用主题配置
+class AppTheme {
+  /// 主色 - 医疗蓝
+  static const Color primary = Color(0xFF0A84FF);
+
+  /// 安全绿（正常血糖）
+  static const Color safeGreen = Color(0xFF34C759);
+
+  /// 警告蓝（低血糖）
+  static const Color warnBlue = Color(0xFF5AC8FA);
+
+  /// 危险红（高血糖）
+  static const Color dangerRed = Color(0xFFFF3B30);
+
+  /// 背景色
+  static Color backgroundColor(bool isDark) =>
+      isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+
+  /// 卡片背景
+  static Color cardColor(bool isDark) =>
+      isDark ? const Color(0xFF2C2C2E) : Colors.white;
+
+  /// 获取完整主题
+  static ThemeData lightTheme = ThemeData(
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: primary,
+      brightness: Brightness.light,
+    ),
+    useMaterial3: true,
+    fontFamily: 'PingFang SC',
+    // 圆角主题
+    cardTheme: CardTheme(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+    ),
+    // 按钮主题
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      ),
+    ),
+    // 页面过渡动画
+    pageTransitionsTheme: const PageTransitionsTheme(builders: {
+      TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+    }),
+  );
+
+  static ThemeData darkTheme = ThemeData(
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: primary,
+      brightness: Brightness.dark,
+    ),
+    useMaterial3: true,
+    fontFamily: 'PingFang SC',
+    cardTheme: CardTheme(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+    ),
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      ),
+    ),
+    pageTransitionsTheme: const PageTransitionsTheme(builders: {
+      TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+    }),
+  );
+}
+
+class BloodSugarApp extends StatelessWidget {
+  const BloodSugarApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: '血糖管家',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: ThemeMode.system,
+      home: const MainTabView(),
+      routes: {
+        '/ble': (context) => const BleScannerScreen(),
+        '/dose': (context) => DoseConfirmationScreen(
+              suggestion: DoseSuggestion(
+                bolusUnits: 0,
+                reason: '测试',
+                safe: true,
+                safetyNote: '',
+              ),
+              onConfirm: () {},
+              onCancel: () => Navigator.pop(context),
+            ),
+        '/pump-pair': (context) => PumpPairScreen(brand: PumpBrand.danaR),
+        '/manual-bolus': (context) => const ManualBolusScreen(),
+        '/community': (context) => const CommunityFeedScreen(),
+        '/ai-assistant': (context) => const AiHealthAssistantScreen(),
+      },
+    );
+  }
+}
+
+class MainTabView extends StatefulWidget {
+  const MainTabView({super.key});
+
+  @override
+  State<MainTabView> createState() => _MainTabViewState();
+}
+
+class _MainTabViewState extends State<MainTabView> {
+  int _index = 0;
+  final _pages = const [
+    DashboardScreen(),
+    BleScannerScreen(),
+    ChatScreen(),
+    ProfileScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: _pages[_index],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (i) => setState(() => _index = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.home), label: '首页'),
+          NavigationDestination(icon: Icon(Icons.bluetooth), label: '蓝牙'),
+          NavigationDestination(icon: Icon(Icons.chat), label: 'AI 助手'),
+          NavigationDestination(icon: Icon(Icons.person), label: '我的'),
+        ],
+      ),
+    );
+  }
+}
