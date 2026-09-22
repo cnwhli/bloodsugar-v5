@@ -70,7 +70,7 @@ class CgmForegroundService {
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(60000),
         autoRunOnBoot: false,
-        allowWakeLock: false, // 不持唤醒锁：靠系统广播唤醒，最省电
+        allowWakeLock: true, // 后台扫蓝牙必须持部分唤醒锁，否则 CPU 睡死收不到广播
         allowWifiLock: false,
       ),
     );
@@ -78,6 +78,8 @@ class CgmForegroundService {
       notificationTitle: '血糖管家监听中',
       notificationText: '等待发射器广播…',
       callback: cgmBackgroundEntryPoint,
+      // Android 14+ 必须声明前台服务类型 connectedDevice，否则 startForeground 被拒、服务秒死
+      serviceTypes: [ForegroundServiceTypes.connectedDevice],
     );
     _started = true;
   }

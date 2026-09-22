@@ -28,6 +28,11 @@
         android:label="bloodsugar_v5"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- 前台服务类型声明（Android 10+ 必填，否则后台 BLE 被杀） -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
