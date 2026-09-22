@@ -118,6 +118,17 @@ class AppDatabase {
     );
   }
 
+  /// 最近 24 小时（时间正序，供曲线图）
+  Future<List<Map<String, dynamic>>> readingsLast24h(
+      {int limit = 288}) async {
+    final rows = await _db!.query(
+      'glucose_readings',
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+    return rows.reversed.toList();
+  }
+
   /// 周统计
   Future<Map<String, dynamic>> weeklyStats() async {
     final result = await _db!.rawQuery('''
