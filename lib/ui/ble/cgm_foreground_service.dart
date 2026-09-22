@@ -30,8 +30,9 @@ class CgmBackgroundHandler extends TaskHandler {
         await AlertService().check(r.valueMmolL);
       } catch (_) {}
     });
-    // 后台用省电模式：扫 15 秒、停 45 秒（发射器 1 分钟广播一次，不漏数）
-    await _m!.startLowPowerWatch();
+    // 后台用省电模式：扫 15 秒、停 45 秒（发射器 1 分钟广播一次，不漏数）。
+    // checkPermission:false——后台弹不出授权框，前台点扫描时已授过权。
+    await _m!.startLowPowerWatch(checkPermission: false);
   }
 
   @override
@@ -51,6 +52,7 @@ class CgmBackgroundHandler extends TaskHandler {
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     await _sub?.cancel();
+    await _m?.stopLowPowerWatch();
   }
 }
 
@@ -73,7 +75,7 @@ class CgmForegroundService {
           const IOSNotificationOptions(showNotification: false),
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(60000),
-        autoRunOnBoot: false,
+        autoRunOnBoot: true, // 开机自启：重启后后台监听自己回来
         allowWakeLock: true, // 后台扫蓝牙必须持部分唤醒锁，否则 CPU 睡死收不到广播
         allowWifiLock: false,
       ),

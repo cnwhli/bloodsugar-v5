@@ -1,14 +1,21 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../watch/multi_watch_arch.dart';
 
-/// 手表端血糖页面
+/// 手表端血糖页面（OPPO Watch X 优先，同时手机可预览）
 /// 支持圆形/方形屏幕自适应
 ///
-/// 数据流：Supabase Realtime → WatchSyncService → 实时更新
-/// 预警：低血糖 (<3.9) 蓝屏三短震 / 高血糖 (>10) 红屏两长震
-
+/// 数据来源（真实，非模拟）：
+/// 1. 本机 BleCgmManager 单例（手机/手表都能单独连发射器——OPPO Watch X
+///    是完整安卓，flutter_blue_plus 可直接在手表上扫 AiDEX 广播）；
+/// 2. 本机数据库（手机收的数，手表装同包也能读到自己收的）；
+/// 3. 官方血糖表盘走 Health Connect（见 HealthBridge），本页是自研表盘。
+///
+/// 预警：低血糖 (<3.9) 蓝屏 + 重震 / 高血糖 (>10) 红屏 + 重震
 class WatchGlucosePage extends StatefulWidget {
   final WatchShape shape; // 屏幕形状（圆形/方形）
   final String userId;
@@ -24,49 +31,99 @@ class WatchGlucosePage extends StatefulWidget {
 }
 
 class _WatchGlucosePageState extends State<WatchGlucosePage> {
+  final _manager = BleCgmManager();
   double _mmolL = 0;
   int _trend = 0;
   String _brand = '';
   DateTime _updatedAt = DateTime.now();
-  bool _lowAlert = false;
-  bool _highAlert = false;
-  bool _loading = true;
-  String _error = '';
+  bool _hasData = false;
+  String _scanState = '';
+  final List<StreamSubscription> _subs = [];
+
+  static const double _lowThreshold = 3.9;
+  static const double _highThreshold = 10.0;
+
+  bool get _lowAlert => _hasData && _mmolL < _lowThreshold;
+  bool get _highAlert => _hasData && _mmolL > _highThreshold;
 
   @override
   void initState() {
     super.initState();
-    _initSupabase();
+    _loadLocal();
+    // 实时订阅：新数进来表盘自动刷
+    _subs.add(_manager.readingStream.listen((r) {
+      if (!mounted) return;
+      setState(() {
+        _mmolL = r.valueMmolL;
+        _trend = r.trend;
+        _brand = r.brandLabel;
+        _updatedAt = r.timestamp;
+        _hasData = true;
+      });
+      _buzzForLevel();
+    }));
+    _subs.add(_manager.stateStream.listen((s) {
+      if (!mounted) return;
+      setState(() => _scanState = s.toString().split('.').last);
+    }));
+    setState(() => _scanState = _manager.state.toString().split('.').last);
   }
 
-  Future<void> _initSupabase() async {
-    // Supabase Realtime 订阅
-    // Supabase.instance.client
-    //     .channel('glucose:${widget.userId}')
-    //     .onPostgresChanges(
-    //       event: 'UPDATE',
-    //       schema: 'public',
-    //       table: 'glucose_readings',
-    //       callback: (payload) {
-    //         final newReading = GlucoseReading.fromJson(payload['new']);
-    //         _checkAlerts(newReading);
-    //       },
-    //     )
-    //     .subscribe();
-
-    // 模拟数据（开发用）
-    await Future.delayed(const Duration(seconds: 1));
-    setState(() {
-      _mmolL = 6.2;
-      _trend = 1;
-      _brand = 'Libre 2';
-      _updatedAt = DateTime.now();
-      _loading = false;
-    });
+  @override
+  void dispose() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    super.dispose();
   }
 
-  void _checkAlerts(GlucoseReading reading) {
-    // 预警检查（由 AlertService 处理）
+  /// 先读本机库最新一条（手表独立用：自己扫自己存，不依赖手机）
+  Future<void> _loadLocal() async {
+    try {
+      await AppDatabase.init();
+      final rows = await AppDatabase.instance.recentReadings(limit: 1);
+      if (!mounted) return;
+      if (rows.isNotEmpty) {
+        final ts = DateTime.tryParse('${rows.first['created_at'] ?? ''}');
+        setState(() {
+          _mmolL =
+              (rows.first['value_mmol_l'] as num?)?.toDouble() ?? 0;
+          _trend = (rows.first['trend'] as num?)?.toInt() ?? 0;
+          _brand = '${rows.first['brand'] ?? ''}';
+          if (ts != null) _updatedAt = ts;
+          _hasData = _mmolL > 0;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleScan() async {
+    if (_manager.state == BleCgmState.scanning) {
+      await _manager.disconnect();
+      return;
+    }
+    await _manager.startScan();
+  }
+
+  Future<void> _buzzForLevel() async {
+    if (_lowAlert || _highAlert) {
+      // 低血糖三短震 / 高血糖两长震（用系统震动，手表端无需插件）
+      final times = _lowAlert ? 3 : 2;
+      for (var i = 0; i < times; i++) {
+        HapticFeedback.heavyImpact();
+        await Future.delayed(
+            Duration(milliseconds: _lowAlert ? 400 : 700));
+      }
+    } else {
+      HapticFeedback.lightImpact();
+    }
+  }
+
+  String _fmtTime(DateTime ts) {
+    final hh = ts.hour.toString().padLeft(2, '0');
+    final mm = ts.minute.toString().padLeft(2, '0');
+    final ss = ts.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
   }
 
   @override
@@ -77,84 +134,85 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
             ? Colors.red
             : Colors.green;
 
-    return WatchAdaptiveLayout(
-      shape: widget.shape,
-      child: _buildContent(statusColor: statusColor),
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: WatchAdaptiveLayout(
+        shape: widget.shape,
+        child: _buildContent(statusColor: statusColor),
+      ),
     );
   }
 
   Widget _buildContent({required Color statusColor}) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_error.isNotEmpty) {
-      return Center(child: Text('错误: $_error'));
-    }
-
+    final big = widget.shape.isCircular ? 40.0 : 56.0;
+    final small = widget.shape.isCircular ? 11.0 : 13.0;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         // 预警横幅
         if (_lowAlert || _highAlert) ...[
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
               color: _lowAlert ? Colors.blue : Colors.red,
-              borderRadius: BorderRadius.circular(widget.shape.isCircular ? 16 : 8),
+              borderRadius: BorderRadius.circular(
+                  widget.shape.isCircular ? 16 : 8),
             ),
             child: Text(
               _lowAlert ? '⚠️ 低血糖' : '⚠️ 高血糖',
               style: TextStyle(
                 color: Colors.white,
-                fontSize: widget.shape.isCircular ? 14 : 20,
+                fontSize: small + 2,
                 fontWeight: FontWeight.bold,
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
         ],
         // 血糖值
         Text(
-          _mmolL > 0 ? _mmolL.toStringAsFixed(1) : '--',
+          _hasData ? _mmolL.toStringAsFixed(1) : '--',
           style: TextStyle(
-            fontSize: widget.shape.isCircular ? 36 : 56,
+            fontSize: big,
             fontWeight: FontWeight.bold,
             color: statusColor,
           ),
         ),
-        const SizedBox(height: 4),
         Text(
-          _mmolL > 0
+          _hasData
               ? '${(_mmolL * 18.0182).toStringAsFixed(0)} mg/dL'
-              : '',
-          style: TextStyle(
-            fontSize: widget.shape.isCircular ? 12 : 16,
-            color: Colors.grey,
-          ),
+              : '暂无数据',
+          style: TextStyle(fontSize: small, color: Colors.grey),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 4),
         Text(
           _trendLabel(_trend),
           style: TextStyle(
-            fontSize: widget.shape.isCircular ? 16 : 18,
-            color: statusColor,
-          ),
+              fontSize: small + 4, color: statusColor),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 2),
         Text(
-          _brand,
-          style: TextStyle(
-            fontSize: widget.shape.isCircular ? 10 : 12,
-            color: Colors.grey,
-          ),
+          _hasData
+              ? '$_brand · ${_fmtTime(_updatedAt)}'
+              : '点下方按钮开始监听',
+          style: TextStyle(fontSize: small, color: Colors.grey),
         ),
-        const SizedBox(height: 4),
-        Text(
-          '${_updatedAt.hour}:${_updatedAt.minute}',
-          style: TextStyle(
-            fontSize: widget.shape.isCircular ? 10 : 12,
-            color: Colors.grey,
+        const SizedBox(height: 8),
+        // 手表独立监听开关（OPPO Watch X 可脱离手机单收广播）
+        OutlinedButton.icon(
+          onPressed: _toggleScan,
+          icon: Icon(
+            _manager.state == BleCgmState.scanning
+                ? Icons.bluetooth_disabled
+                : Icons.bluetooth_searching,
+            size: 16,
+          ),
+          label: Text(
+            _manager.state == BleCgmState.scanning
+                ? '停止 ($_scanState)'
+                : '手表监听',
+            style: const TextStyle(fontSize: 12),
           ),
         ),
       ],
@@ -163,12 +221,18 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
 
   String _trendLabel(int trend) {
     switch (trend) {
-      case 0: return '→ 平';
-      case 1: return '↗ 慢升';
-      case 2: return '↗ 快升';
-      case 3: return '↘ 慢降';
-      case 4: return '↘ 快降';
-      default: return '--';
+      case 0:
+        return '→ 平';
+      case 1:
+        return '↗ 慢升';
+      case 2:
+        return '↗ 快升';
+      case 3:
+        return '↘ 慢降';
+      case 4:
+        return '↘ 快降';
+      default:
+        return '--';
     }
   }
 }

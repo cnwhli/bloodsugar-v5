@@ -555,6 +555,35 @@ class BleCgmManager {
 
   StreamSubscription<List<ScanResult>>? _scanSub;
 
+  /// Android 7+ 系统级限制：BLE 扫描约 30 分钟后会被系统自动停掉
+  /// （省电策略），表现为"放着不动就没数了"。看门狗每 25 分钟无感
+  /// 续期一次：只调平台 stop/start，不碰 _scanSub 订阅，数据流不断。
+  Timer? _scanWatchdog;
+
+  void _startScanWatchdog() {
+    _stopScanWatchdog();
+    _scanWatchdog =
+        Timer.periodic(const Duration(minutes: 25), (_) async {
+      if (_state != BleCgmState.scanning) return;
+      try {
+        await FlutterBluePlus.stopScan();
+        await FlutterBluePlus.startScan(
+          continuousUpdates: true,
+          removeIfGone: const Duration(minutes: 2),
+          androidScanMode: AndroidScanMode.lowLatency,
+        );
+        _log('扫描保活：已自动续期（防系统 30 分钟停扫）');
+      } catch (e) {
+        _log('扫描保活失败：$e');
+      }
+    });
+  }
+
+  void _stopScanWatchdog() {
+    _scanWatchdog?.cancel();
+    _scanWatchdog = null;
+  }
+
   // 去重：同一数值 60 秒内只收一次（AiDEX 广播几秒一次，不去重会刷屏）
   // 注意：按“分钟序号(minFromStart)”去重，而不是按数值——
   // 数值长时间不变也必须每分钟收一条，否则曲线成断点、数值"一直不变"
@@ -581,9 +610,14 @@ class BleCgmManager {
   Timer? _lowPowerTimer;
   bool _lowPowerRunning = false;
 
-  Future<String?> startLowPowerWatch() async {
-    final err = await _ensureReady();
-    if (err != null) return err;
+  /// checkPermission=false：给后台 isolate 用——后台弹不出授权框，
+  /// request() 会直接返回 denied 导致后台扫不到，必须跳过（前台点扫描时已授过权）。
+  /// 这就是"放后台就断、一打开就有"的病根之一。
+  Future<String?> startLowPowerWatch({bool checkPermission = true}) async {
+    if (checkPermission) {
+      final err = await _ensureReady();
+      if (err != null) return err;
+    }
     await stopLowPowerWatch();
     _lowPowerRunning = true;
     _setState(BleCgmState.scanning);
@@ -606,6 +640,7 @@ class BleCgmManager {
   }
 
   Future<void> stopLowPowerWatch() async {
+    _stopScanWatchdog();
     _lowPowerRunning = false;
     _lowPowerTimer?.cancel();
     _lowPowerTimer = null;
@@ -716,6 +751,7 @@ class BleCgmManager {
         androidScanMode: AndroidScanMode.lowLatency,
       );
       _log('监听已启动：发射器每分钟广播一次，有新数自动入库…');
+      _startScanWatchdog(); // 防 Android 30 分钟自动停扫
     } catch (e) {
       final msg = '启动扫描失败：$e';
       _log(msg);
@@ -731,7 +767,7 @@ class BleCgmManager {
     _setState(BleCgmState.connecting);
     try {
       await protocol.handleDevice(device, (reading) {
-        _readingController.add(reading);
+        _emitReading(reading); // 进 history 缓存，切页/重进不丢
       }, _log);
       _connectedDevice = device;
       _setState(BleCgmState.connected);
@@ -745,6 +781,7 @@ class BleCgmManager {
 
   /// 断开/停止：停省电轮询 + 停扫描 + 断 GATT。切页面不调这个，只有点"断开"和退出才调。
   Future<void> disconnect() async {
+    _stopScanWatchdog();
     await stopLowPowerWatch();
     await _detachListener();
     await _connectedDevice?.disconnect();

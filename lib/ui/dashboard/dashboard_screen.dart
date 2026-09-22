@@ -21,6 +21,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? _stats;
   List<Map<String, dynamic>> _history = [];
   String _latestTime = ''; // 最新读数时间（你要的"血糖时间"）
+  DateTime _chartT0 = DateTime.now(); // 曲线首点时间（横轴刻度反推用）
   StreamSubscription<GlucoseReading>? _readingSub;
 
   @override
@@ -47,6 +48,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted) return;
     setState(() {
       _history = history;
+      if (history.isNotEmpty) {
+        _chartT0 = DateTime.tryParse(
+                '${history.first['created_at'] ?? ''}') ??
+            DateTime.now();
+      }
       if (latest.isNotEmpty) {
         _currentGlucose =
             (latest.first['value_mmol_l'] as num?)?.toDouble() ?? 0;
@@ -231,6 +237,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       Icons.medical_services, '泵配对', '/pump-pair'),
                   _navButton(Icons.send, '手动给药', '/manual-bolus'),
                   _navButton(Icons.show_chart, '报告', '/report'),
+                  _navButton(Icons.watch, '手表显示', '/watch'),
                 ],
               ),
             ],
@@ -248,15 +255,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
     final spots = <FlSpot>[];
+    // X 轴用真实时间（相对首点的分钟数）：断连的空档会在曲线上留出缺口，
+    // 刻度也是从真实时间反推的——这才是"按时间显示"，之前是按序号画的
+    final parsed = <DateTime>[];
+    for (final r in _history) {
+      parsed.add(DateTime.tryParse('${r['created_at'] ?? ''}') ??
+          DateTime.now());
+    }
+    final t0 = parsed.first;
     for (var i = 0; i < _history.length; i++) {
       final v =
           (_history[i]['value_mmol_l'] as num?)?.toDouble() ?? 0;
-      spots.add(FlSpot(i.toDouble(), v.clamp(0, 25)));
+      final xMin = parsed[i].difference(t0).inMinutes.toDouble();
+      spots.add(FlSpot(xMin < 0 ? 0 : xMin, v.clamp(0, 25)));
     }
     final maxY = (spots.map((s) => s.y).reduce((a, b) => a > b ? a : b))
         .clamp(12.0, 25.0);
+    final maxX = spots.last.x <= 0 ? 60.0 : spots.last.x;
     return LineChart(
       LineChartData(
+        minX: 0,
+        maxX: maxX,
         minY: 0,
         maxY: maxY,
         gridData: FlGridData(
@@ -284,17 +303,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
               showTitles: true,
               reservedSize: 28,
               interval: 1,
-              // 时间轴：按 HH:MM 显示首/中/末三个点
               getTitlesWidget: (v, meta) {
-                final idx = v.toInt();
                 final n = _history.length;
                 if (n < 2) return const SizedBox.shrink();
-                final show = idx == 0 ||
-                    idx == n - 1 ||
-                    idx == n ~/ 2;
+                // 按真实时间反推 v 分钟对应的刻度（头部/中部/尾部各一个）
+                final show = v == meta.min ||
+                    v == meta.max ||
+                    (v - (meta.min + meta.max) / 2).abs() <
+                        (meta.max - meta.min) / 6 + 1;
                 if (!show) return const SizedBox.shrink();
-                final t = _axisTime(
-                    '${_history[idx.clamp(0, n - 1)]['created_at'] ?? ''}');
+                final t = _axisTime(_chartT0
+                    .add(Duration(minutes: v.toInt()))
+                    .toString());
                 return Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(

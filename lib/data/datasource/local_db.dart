@@ -118,15 +118,15 @@ class AppDatabase {
     );
   }
 
-  /// 最近 24 小时（时间正序，供曲线图）
+  /// 最近 24 小时（时间正序，供曲线图；只取 24 小时内，旧数据不画）
   Future<List<Map<String, dynamic>>> readingsLast24h(
       {int limit = 288}) async {
-    final rows = await _db!.query(
+    return _db!.query(
       'glucose_readings',
-      orderBy: 'created_at DESC',
+      where: "created_at >= datetime('now','localtime','-24 hours')",
+      orderBy: 'created_at ASC',
       limit: limit,
     );
-    return rows.reversed.toList();
   }
 
   /// 周统计

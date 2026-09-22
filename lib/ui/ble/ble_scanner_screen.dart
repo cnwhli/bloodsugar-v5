@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
@@ -184,6 +185,10 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () async {
+                          // 先要"忽略电池优化"，否则国产 ROM 锁屏就杀扫描——
+                          // 放后台断数的另一个常见病根
+                          await FlutterForegroundTask
+                              .requestIgnoreBatteryOptimization();
                           await _manager.startScan();
                           await CgmForegroundService.start();
                         },
