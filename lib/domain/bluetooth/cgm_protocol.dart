@@ -502,6 +502,23 @@ class BleCgmManager {
 
   StreamSubscription<List<ScanResult>>? _scanSub;
 
+  // 去重：同一数值 60 秒内只收一次（AiDEX 广播几秒一次，不去重会刷屏）
+  GlucoseReading? _lastEmitted;
+  DateTime _lastEmittedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  bool _shouldEmit(GlucoseReading r) {
+    final now = DateTime.now();
+    if (_lastEmitted != null &&
+        _lastEmitted!.valueMgDl == r.valueMgDl &&
+        _lastEmitted!.brand == r.brand &&
+        now.difference(_lastEmittedAt).inSeconds < 60) {
+      return false;
+    }
+    _lastEmitted = r;
+    _lastEmittedAt = now;
+    return true;
+  }
+
   /// 开始扫描 CGM 设备
   /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
   Future<String?> startScan() async {
@@ -561,9 +578,9 @@ class BleCgmManager {
             if (!protocol.matches(r)) continue;
             final name = advName.isEmpty ? id : advName;
             if (protocol.isAdvertisementBased) {
-              // 被动广播：直接解析
+              // 被动广播：直接解析（同值 60 秒去重，防刷屏）
               protocol.parseAdvertisement(r).then((reading) {
-                if (reading != null) {
+                if (reading != null && _shouldEmit(reading)) {
                   _readingController.add(reading);
                   _log('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · '
                       '${reading.brand.displayName} · 广播');
