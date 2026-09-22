@@ -3,8 +3,8 @@
 /// - 高/低阈值用户可调（默认 10.0 / 3.9）
 /// - 报警方式：仅震动 / 仅声音 / 震动+声音 / 关闭
 /// - 新读数入库时由 AlertService 检查，触发则震动/响铃
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:vibration/vibration.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 enum AlertMode {
@@ -83,9 +83,10 @@ class AlertService {
     _lastFired = now;
     if (mode == AlertMode.vibration || mode == AlertMode.both) {
       try {
-        if (await Vibration.hasVibrator()) {
-          await Vibration.vibrate(duration: 800);
-        }
+        // 系统震动：HapticFeedback 无需额外插件/权限（VIBRATE 已在 Manifest 声明）
+        await HapticFeedback.vibrate();
+        await Future.delayed(const Duration(milliseconds: 200));
+        await HapticFeedback.vibrate();
       } catch (_) {}
     }
     if (mode == AlertMode.sound || mode == AlertMode.both) {
