@@ -491,11 +491,16 @@ class BleCgmManager {
   Stream<GlucoseReading> get readingStream => _readingController.stream;
   Stream<String> get logStream => _logController.stream;
 
-  void _log(String s) => _logController.add(s);
+  void _log(String s) {
+    if (!_logController.isClosed) _logController.add(s);
+  }
+
   void _setState(BleCgmState s) {
     _state = s;
-    _stateController.add(s);
+    if (!_stateController.isClosed) _stateController.add(s);
   }
+
+  StreamSubscription<List<ScanResult>>? _scanSub;
 
   /// 开始扫描 CGM 设备
   /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
@@ -531,10 +536,53 @@ class BleCgmManager {
     _log('同时打开微泰 App 确认发射器在广播（能看到数值即正常）');
 
     // 3. 通配扫描：不过滤 service（部分手机过滤会漏广播），靠 matches() 判定
+    await _scanSub?.cancel();
+    await FlutterBluePlus.stopScan().catchError((_) {});
+    final seen = <String>{};
+    var resultCount = 0;
     try {
+      _scanSub = FlutterBluePlus.scanResults.listen((results) {
+        // 有结果就报数（去重：同一个 MAC 只报一次设备名）
+        for (final r in results) {
+          final id = r.device.remoteId.toString();
+          final advName = r.advertisementData.advName;
+          if (seen.add(id)) {
+            resultCount++;
+            if (advName.isNotEmpty) {
+              _log('附近：$advName');
+            } else {
+              final svcs = r.advertisementData.serviceUuids
+                  .map((g) => g.toString().substring(4, 8).toUpperCase())
+                  .join(',');
+              _log('附近：(无名) $id 服务[$svcs]');
+            }
+          }
+          for (final protocol in _protocols) {
+            if (!protocol.matches(r)) continue;
+            final name = advName.isEmpty ? id : advName;
+            if (protocol.isAdvertisementBased) {
+              // 被动广播：直接解析
+              protocol.parseAdvertisement(r).then((reading) {
+                if (reading != null) {
+                  _readingController.add(reading);
+                  _log('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · '
+                      '${reading.brand.displayName} · 广播');
+                }
+              });
+            } else {
+              if (_connecting.contains(id)) continue;
+              _connecting.add(id);
+              _log('发现 $name（${protocol.brand.displayName}），连接中…');
+              _connectToDevice(r.device, protocol);
+            }
+            break;
+          }
+        }
+      });
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 60),
       );
+      _log('扫描已启动，60 秒内靠近的蓝牙设备都会列出来…');
     } catch (e) {
       final msg = '启动扫描失败：$e';
       _log(msg);
@@ -542,40 +590,14 @@ class BleCgmManager {
       return msg;
     }
 
-    FlutterBluePlus.scanResults.listen((results) {
-      if (results.isEmpty) return;
-      _log('扫到 ${results.length} 个蓝牙设备，逐个识别…');
-      for (final r in results) {
-        final advName = r.advertisementData.advName;
-        if (advName.isNotEmpty) _log('附近：$advName');
-        for (final protocol in _protocols) {
-          if (!protocol.matches(r)) continue;
-          final name = r.advertisementData.advName.isEmpty
-              ? r.device.remoteId.toString()
-              : r.advertisementData.advName;
-          if (protocol.isAdvertisementBased) {
-            // 被动广播：直接解析
-            protocol.parseAdvertisement(r).then((reading) {
-              if (reading != null) {
-                _readingController.add(reading);
-                _log('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · '
-                    '${reading.brand.displayName} · 广播');
-              }
-            });
-          } else {
-            if (_connecting.contains(r.device.remoteId.toString())) continue;
-            _connecting.add(r.device.remoteId.toString());
-            _log('发现 $name（${protocol.brand.displayName}），连接中…');
-            _connectToDevice(r.device, protocol);
-          }
-          break;
-        }
-      }
-    });
-
-    Future.delayed(const Duration(seconds: 61), () {
+    Future.delayed(const Duration(seconds: 61), () async {
+      await FlutterBluePlus.stopScan().catchError((_) {});
       if (_state == BleCgmState.scanning) {
-        _log('60 秒扫描结束：没识别到 CGM，请把日志里"附近："的设备名发过来');
+        if (resultCount == 0) {
+          _log('60 秒一个设备都没扫到：可能被微泰 App 独占，去系统设置里把微泰 App 的蓝牙权限关掉再扫');
+        } else {
+          _log('60 秒扫描结束：没识别到 CGM，请把日志里"附近："的设备名发过来');
+        }
         _setState(BleCgmState.idle);
       }
     });
