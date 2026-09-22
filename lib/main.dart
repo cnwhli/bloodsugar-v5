@@ -148,7 +148,9 @@ class _MainTabViewState extends State<MainTabView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_index],
+      // IndexedStack：4 个 tab 页常驻不销毁——蓝牙监听、列表、订阅切页不断，
+      // 之前切页即 dispose 是"切页丢数据"的病根之一
+      body: IndexedStack(index: _index, children: _pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),

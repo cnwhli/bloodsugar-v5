@@ -29,8 +29,9 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   void initState() {
     super.initState();
     AppDatabase.init();
-    // manager 是单例常驻：进来先把缓存的历史读数铺上（页面切换不丢）
+    // manager 是单例常驻：先铺内存缓存，再从数据库补（App 重启也不丢）
     _readings = List.of(_manager.history);
+    _reloadFromDb();
     _statusText = _manager.state.toString().split('.').last;
     _subs.add(_manager.stateStream.listen((state) {
       if (!mounted) return;
@@ -80,6 +81,45 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       s.cancel();
     }
     super.dispose();
+  }
+
+  /// 从数据库补历史（新读数入库后也会调用，保持内存与数据库一致）
+  Future<void> _reloadFromDb() async {
+    try {
+      await AppDatabase.init();
+      final rows =
+          await AppDatabase.instance.recentReadings(limit: 100);
+      if (!mounted) return;
+      final fromDb = rows.map(GlucoseReading.fromDb).toList();
+      // 合并：内存里有但库里没有的（刚收还没写完）保留，去重按时间戳+数值
+      final keys = fromDb
+          .map((r) =>
+              '${r.timestamp.toString().substring(0, 19)}|${r.valueMmolL.toStringAsFixed(1)}')
+          .toSet();
+      final merged = List.of(fromDb);
+      for (final r in _readings) {
+        final k =
+            '${r.timestamp.toString().substring(0, 19)}|${r.valueMmolL.toStringAsFixed(1)}';
+        if (!keys.contains(k)) merged.add(r);
+      }
+      merged.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      setState(() {
+        _readings =
+            merged.length > 100 ? merged.sublist(0, 100) : merged;
+      });
+    } catch (_) {}
+  }
+
+  /// 时间格式：今天显示 HH:MM:SS，跨天显示 MM-DD HH:MM
+  String _fmtTime(DateTime ts) {
+    final now = DateTime.now();
+    final hh = ts.hour.toString().padLeft(2, '0');
+    final mm = ts.minute.toString().padLeft(2, '0');
+    final ss = ts.second.toString().padLeft(2, '0');
+    if (ts.year == now.year && ts.month == now.month && ts.day == now.day) {
+      return '$hh:$mm:$ss';
+    }
+    return '${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')} $hh:$mm';
   }
 
   @override
@@ -172,7 +212,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                               fontWeight: FontWeight.bold),
                         ),
                         subtitle: Text(
-                          '${r.brand.displayName} · ${r.timestamp.toString().substring(11, 19)}',
+                          // 时间精确到秒 + 日期（跨天也能看出来）
+                          '${r.brandLabel} · ${_fmtTime(r.timestamp)}',
                         ),
                         trailing: Icon(
                           r.status == 'low'

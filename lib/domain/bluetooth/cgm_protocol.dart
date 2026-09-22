@@ -65,6 +65,7 @@ class GlucoseReading {
   final CgmBrand brand;
   final int? quality; // 信号质量（AiDEX 广播带）
   final int? minFromStart; // 发射器启动分钟序号（AiDEX 广播带，去重用）
+  final String? rawBrand; // 数据库里的原始品牌字串（未知品牌回显用）
 
   GlucoseReading({
     required this.valueMgDl,
@@ -73,7 +74,37 @@ class GlucoseReading {
     required this.brand,
     this.quality,
     this.minFromStart,
+    this.rawBrand,
   }) : valueMmolL = valueMgDl / 18.0182;
+
+  /// 显示用品牌名：未知品牌回显数据库原字串（如"手动输入"），不显示 Unknown
+  String get brandLabel =>
+      (brand == CgmBrand.unknown && rawBrand != null && rawBrand!.isNotEmpty)
+          ? rawBrand!
+          : brand.displayName;
+
+  /// 从数据库行恢复（created_at 为 "YYYY-MM-DD HH:MM:SS" 本地时间）
+  factory GlucoseReading.fromDb(Map<String, dynamic> m) {
+    final mmol = (m['value_mmol_l'] as num?)?.toDouble() ?? 0;
+    final raw = '${m['brand'] ?? ''}';
+    final brand = CgmBrand.values.firstWhere(
+      (b) => b.displayName == raw || b.name == raw,
+      orElse: () => CgmBrand.unknown,
+    );
+    DateTime ts;
+    try {
+      ts = DateTime.parse('${m['created_at']}');
+    } catch (_) {
+      ts = DateTime.now();
+    }
+    return GlucoseReading(
+      valueMgDl: mmol * 18.0182,
+      timestamp: ts,
+      trend: (m['trend'] as num?)?.toInt() ?? 0,
+      brand: brand,
+      rawBrand: brand == CgmBrand.unknown && raw.isNotEmpty ? raw : null,
+    );
+  }
 
   String get status {
     if (valueMgDl < 70) return 'low';
