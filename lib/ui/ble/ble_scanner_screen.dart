@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
+import 'cgm_foreground_service.dart';
 
 /// BLE 扫描 + 连接页面（多品牌 CGM）
 ///
@@ -166,14 +167,17 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
               style: TextStyle(fontSize: 12, color: Colors.black87),
             ),
           ),
-          // 操作按钮
+          // 操作按钮：扫描=前台持续监听+后台前台服务（退后台/锁屏继续收）
           Padding(
             padding: const EdgeInsets.all(8),
             child: Row(
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => _manager.startScan(),
+                    onPressed: () async {
+                      await _manager.startScan();
+                      await CgmForegroundService.start();
+                    },
                     icon: const Icon(Icons.bluetooth_searching),
                     label: const Text('扫描'),
                   ),
@@ -181,7 +185,10 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => _manager.disconnect(),
+                    onPressed: () async {
+                      await CgmForegroundService.stop();
+                      await _manager.disconnect();
+                    },
                     icon: const Icon(Icons.bluetooth_disabled),
                     label: const Text('断开'),
                   ),

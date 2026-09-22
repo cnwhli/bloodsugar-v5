@@ -575,9 +575,94 @@ class BleCgmManager {
     return true;
   }
 
-  /// 开始扫描 CGM 设备
-  /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
-  Future<String?> startScan() async {
+  /// 省电轮询（后台/手表用）：扫 15 秒、停 45 秒循环。
+  /// 发射器 1 分钟广播一次，15 秒窗口足够抓住；其余时间射频休眠。
+  /// 比 continuousScan 省电一个数量级，和发射器 cadence 对齐不漏数。
+  Timer? _lowPowerTimer;
+  bool _lowPowerRunning = false;
+
+  Future<String?> startLowPowerWatch() async {
+    final err = await _ensureReady();
+    if (err != null) return err;
+    await stopLowPowerWatch();
+    _lowPowerRunning = true;
+    _setState(BleCgmState.scanning);
+    _log('省电监听：每分钟扫 15 秒（对齐发射器广播），其余休眠');
+    _lowPowerTimer =
+        Timer.periodic(const Duration(minutes: 1), (_) => _lowPowerBurst());
+    _lowPowerBurst(); // 立刻来一次
+    return null;
+  }
+
+  Future<void> _lowPowerBurst() async {
+    if (!_lowPowerRunning) return;
+    _attachListener();
+    try {
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 15),
+        androidScanMode: AndroidScanMode.lowPower,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> stopLowPowerWatch() async {
+    _lowPowerRunning = false;
+    _lowPowerTimer?.cancel();
+    _lowPowerTimer = null;
+    await _detachListener();
+  }
+
+  // ---- 监听 attach/detach（前台持续 / 后台省电共用同一套解析）----
+
+  final Set<String> _seen = {};
+
+  void _attachListener() {
+    _scanSub ??= FlutterBluePlus.scanResults.listen((results) {
+      for (final r in results) {
+        final id = r.device.remoteId.toString();
+        final advName = r.advertisementData.advName;
+        if (_seen.add(id)) {
+          if (advName.isNotEmpty) {
+            _log('附近：$advName');
+          } else {
+            final svcs = r.advertisementData.serviceUuids
+                .map((g) => g.toString().substring(4, 8).toUpperCase())
+                .join(',');
+            _log('附近：(无名) $id 服务[$svcs]');
+          }
+        }
+        for (final protocol in _protocols) {
+          if (!protocol.matches(r)) continue;
+          final name = advName.isEmpty ? id : advName;
+          if (protocol.isAdvertisementBased) {
+            protocol.parseAdvertisement(r).then((reading) {
+              if (reading != null && _shouldEmit(reading)) {
+                _emitReading(reading);
+                _log('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · '
+                    '${reading.brand.displayName} · 广播');
+              }
+            });
+          } else {
+            if (_connecting.contains(id)) continue;
+            _connecting.add(id);
+            _log('发现 $name（${protocol.brand.displayName}），连接中…');
+            _connectToDevice(r.device, protocol);
+          }
+          break;
+        }
+      }
+    });
+  }
+
+  Future<void> _detachListener() async {
+    await _scanSub?.cancel();
+    _scanSub = null;
+    await FlutterBluePlus.stopScan().catchError((_) {});
+  }
+
+  /// 权限 + 蓝牙就绪检查（startScan 与 startLowPowerWatch 共用）
+  /// 返回 null = 就绪；返回字符串 = 失败原因（已写日志）
+  Future<String?> _ensureReady() async {
     // 1. 权限：Android 12+ 要 BLUETOOTH_SCAN/CONNECT，老版本要定位
     final scan = await Permission.bluetoothScan.request();
     final connect = await Permission.bluetoothConnect.request();
@@ -591,6 +676,8 @@ class BleCgmManager {
     if (!location.isGranted) {
       _log('提醒：未授予定位权限，Android 11 及以下可能扫不到 BLE 设备');
     }
+    // 通知权限（前台服务常驻通知用，不强制）
+    await Permission.notification.request();
 
     // 2. 蓝牙开关
     final adapterState = await FlutterBluePlus.adapterState.first;
@@ -603,56 +690,25 @@ class BleCgmManager {
     try {
       await FlutterBluePlus.turnOn();
     } catch (_) {}
+    return null;
+  }
+
+  /// 开始扫描 CGM 设备（前台持续监听，点"断开"才停）
+  /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
+  Future<String?> startScan() async {
+    final err = await _ensureReady();
+    if (err != null) return err;
+    await stopLowPowerWatch();
 
     _setState(BleCgmState.scanning);
     _log('开始监听…（AiDEX/微泰二代广播自动收数，无需配对）');
     _log('注意：微泰官方 App 会独占发射器——扫之前先杀掉它');
 
-    // AiDEX 是被动广播：continuousScan 持续监听，不设 timeout，
-    // 点"断开"才停。数值每分钟变一次（minFromStart 递增即新数据）。
-    await _scanSub?.cancel();
-    await FlutterBluePlus.stopScan().catchError((_) {});
-    final seen = <String>{};
-    var resultCount = 0;
+    // AiDEX 是被动广播：持续监听，不设 timeout，点"断开"才停。
+    // 数值每分钟变一次（minFromStart 递增即新数据）。
+    await _detachListener();
     try {
-      _scanSub = FlutterBluePlus.scanResults.listen((results) {
-        // 有结果就报数（去重：同一个 MAC 只报一次设备名）
-        for (final r in results) {
-          final id = r.device.remoteId.toString();
-          final advName = r.advertisementData.advName;
-          if (seen.add(id)) {
-            resultCount++;
-            if (advName.isNotEmpty) {
-              _log('附近：$advName');
-            } else {
-              final svcs = r.advertisementData.serviceUuids
-                  .map((g) => g.toString().substring(4, 8).toUpperCase())
-                  .join(',');
-              _log('附近：(无名) $id 服务[$svcs]');
-            }
-          }
-          for (final protocol in _protocols) {
-            if (!protocol.matches(r)) continue;
-            final name = advName.isEmpty ? id : advName;
-            if (protocol.isAdvertisementBased) {
-              // 被动广播：直接解析（同分钟去重，数值不变也每分钟收一条）
-              protocol.parseAdvertisement(r).then((reading) {
-                if (reading != null && _shouldEmit(reading)) {
-                  _emitReading(reading);
-                  _log('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · '
-                      '${reading.brand.displayName} · 广播');
-                }
-              });
-            } else {
-              if (_connecting.contains(id)) continue;
-              _connecting.add(id);
-              _log('发现 $name（${protocol.brand.displayName}），连接中…');
-              _connectToDevice(r.device, protocol);
-            }
-            break;
-          }
-        }
-      });
+      _attachListener();
       await FlutterBluePlus.startScan(
         continuousUpdates: true,
         removeIfGone: const Duration(minutes: 2),
@@ -687,11 +743,10 @@ class BleCgmManager {
     }
   }
 
-  /// 断开/停止：停扫描 + 断 GATT。切页面不调这个，只有点"断开"和退出才调。
+  /// 断开/停止：停省电轮询 + 停扫描 + 断 GATT。切页面不调这个，只有点"断开"和退出才调。
   Future<void> disconnect() async {
-    await _scanSub?.cancel();
-    _scanSub = null;
-    await FlutterBluePlus.stopScan().catchError((_) {});
+    await stopLowPowerWatch();
+    await _detachListener();
     await _connectedDevice?.disconnect();
     _connectedDevice = null;
     _connecting.clear();

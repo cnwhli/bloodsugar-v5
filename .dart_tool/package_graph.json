@@ -13,6 +13,7 @@
         "fluentui_system_icons",
         "flutter",
         "flutter_blue_plus",
+        "flutter_foreground_task",
         "flutter_secure_storage",
         "google_fonts",
         "http",
@@ -1707,6 +1708,16 @@
       "dependencies": [
         "collection",
         "meta"
+      ]
+    },
+    {
+      "name": "flutter_foreground_task",
+      "version": "9.2.2",
+      "dependencies": [
+        "flutter",
+        "platform",
+        "plugin_platform_interface",
+        "shared_preferences"
       ]
     }
   ],

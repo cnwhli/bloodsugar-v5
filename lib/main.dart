@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:bloodsugar_v5/ui/dashboard/dashboard_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/ble_scanner_screen.dart';
+import 'package:bloodsugar_v5/ui/ble/cgm_foreground_service.dart';
 import 'package:bloodsugar_v5/ui/ble/manual_entry_screen.dart';
 import 'package:bloodsugar_v5/ui/report/report_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/dose_confirmation_screen.dart';
@@ -15,6 +17,8 @@ import 'package:bloodsugar_v5/domain/bluetooth/pump_pairing.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 前台服务通信端口（后台 isolate 收数 → 主 isolate 入库/刷新 UI）
+  FlutterForegroundTask.initCommunicationPort();
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

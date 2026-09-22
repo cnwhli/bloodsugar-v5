@@ -338,6 +338,12 @@
       "languageVersion": "3.3"
     },
     {
+      "name": "flutter_foreground_task",
+      "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/flutter_foreground_task-9.2.2",
+      "packageUri": "lib/",
+      "languageVersion": "3.4"
+    },
+    {
       "name": "flutter_secure_storage",
       "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/flutter_secure_storage-9.2.4",
       "packageUri": "lib/",

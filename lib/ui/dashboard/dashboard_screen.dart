@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../data/datasource/local_db.dart';
+import '../../domain/bluetooth/cgm_protocol.dart';
 
 /// 首页仪表盘
 /// 血糖圆环 + 24小时曲线 + 周统计 + 快捷操作
@@ -17,11 +20,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Color _statusColor = Colors.grey;
   Map<String, dynamic>? _stats;
   List<Map<String, dynamic>> _history = [];
+  String _latestTime = ''; // 最新读数时间（你要的"血糖时间"）
+  StreamSubscription<GlucoseReading>? _readingSub;
 
   @override
   void initState() {
     super.initState();
     _loadLatest();
+    // 新数进来首页自动刷：数值+时间+曲线+周统计一起更新，不用手动下拉
+    _readingSub =
+        BleCgmManager().readingStream.listen((_) => _loadLatest());
+  }
+
+  @override
+  void dispose() {
+    _readingSub?.cancel(); // 只取消订阅，manager 常驻
+    super.dispose();
   }
 
   Future<void> _loadLatest() async {
@@ -39,6 +53,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _trend = _trendLabel(
             (latest.first['trend'] as num?)?.toInt() ?? 0);
         _statusColor = _statusColorFor(_currentGlucose);
+        _latestTime = _fmtDbTime('${latest.first['created_at'] ?? ''}');
       }
     });
     final stats = await AppDatabase.instance.weeklyStats();
@@ -67,6 +82,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (mmolL < 3.9) return Colors.blue;
     if (mmolL > 10.0) return Colors.red;
     return Colors.green;
+  }
+
+  /// 数据库时间 "YYYY-MM-DD HH:MM:SS" → 今天显示 HH:MM:SS，跨天显示 MM-DD HH:MM
+  String _fmtDbTime(String s) {
+    if (s.isEmpty) return '';
+    try {
+      final ts = DateTime.parse(s);
+      final now = DateTime.now();
+      final hh = ts.hour.toString().padLeft(2, '0');
+      final mm = ts.minute.toString().padLeft(2, '0');
+      final ss = ts.second.toString().padLeft(2, '0');
+      if (ts.year == now.year &&
+          ts.month == now.month &&
+          ts.day == now.day) {
+        return '$hh:$mm:$ss';
+      }
+      return '${ts.month.toString().padLeft(2, '0')}-'
+          '${ts.day.toString().padLeft(2, '0')} $hh:$mm';
+    } catch (_) {
+      return s.length >= 19 ? s.substring(5, 19) : s;
+    }
   }
 
   @override
@@ -106,6 +142,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     : '',
                 style: const TextStyle(fontSize: 14, color: Colors.grey),
               ),
+              // 最新读数时间
+              if (_latestTime.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '更新于 $_latestTime',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.grey),
+                  ),
+                ),
               const SizedBox(height: 16),
 
               // 24 小时曲线
