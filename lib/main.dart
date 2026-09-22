@@ -9,6 +9,7 @@ import 'package:bloodsugar_v5/ui/ble/manual_bolus_screen.dart';
 import 'package:bloodsugar_v5/ui/chat/chat_screen.dart';
 import 'package:bloodsugar_v5/ui/community/community_feed_screen.dart';
 import 'package:bloodsugar_v5/ui/profile/profile_screen.dart';
+import 'package:bloodsugar_v5/ui/profile/alert_settings_screen.dart';
 import 'package:bloodsugar_v5/services/rag_service.dart';
 import 'package:bloodsugar_v5/domain/bluetooth/pump_pairing.dart';
 
@@ -122,6 +123,7 @@ class BloodSugarApp extends StatelessWidget {
         '/manual-bolus': (context) => const ManualBolusScreen(),
         '/community': (context) => const CommunityFeedScreen(),
         '/ai-assistant': (context) => const AiHealthAssistantScreen(),
+        '/alert-settings': (context) => const AlertSettingsScreen(),
       },
     );
   }

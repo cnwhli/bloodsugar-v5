@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../data/datasource/local_db.dart';
 import 'ai_settings_screen.dart';
+import 'alert_settings_screen.dart';
 
 /// 个人中心：资料 + 目标范围 + AI 设置入口 + 数据导出
 class ProfileScreen extends StatefulWidget {
@@ -57,6 +58,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
               MaterialPageRoute(
                   builder: (_) => const AiSettingsScreen()),
             ).then((_) => _load()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.notifications_active),
+            title: const Text('报警设置'),
+            subtitle: const Text('高低阈值 · 震动 / 声音 / 震动+声音'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const AlertSettingsScreen()),
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.show_chart),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
+import '../../services/alert_service.dart';
 
 /// BLE 扫描 + 连接页面（多品牌 CGM）
 ///
@@ -43,6 +44,25 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         if (_readings.length > 100) _readings.removeLast();
       });
       await AppDatabase.instance.insertReading(reading);
+      // 超阈值报警（震动/声音/震动+声音，由设置页决定）
+      if (mounted) {
+        final msg = await AlertService().check(reading.valueMmolL);
+        if (msg != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(msg),
+              duration: const Duration(seconds: 5),
+              backgroundColor: Colors.red[700],
+              action: SnackBarAction(
+                label: '设置',
+                textColor: Colors.white,
+                onPressed: () =>
+                    Navigator.pushNamed(context, '/alert-settings'),
+              ),
+            ),
+          );
+        }
+      }
     });
   }
 

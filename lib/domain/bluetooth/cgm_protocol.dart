@@ -64,6 +64,7 @@ class GlucoseReading {
   final int trend; // 0=稳定, 1=上升, 2=大幅上升, 3=下降, 4=大幅下降
   final CgmBrand brand;
   final int? quality; // 信号质量（AiDEX 广播带）
+  final int? minFromStart; // 发射器启动分钟序号（AiDEX 广播带，去重用）
 
   GlucoseReading({
     required this.valueMgDl,
@@ -71,6 +72,7 @@ class GlucoseReading {
     this.trend = 0,
     required this.brand,
     this.quality,
+    this.minFromStart,
   }) : valueMmolL = valueMgDl / 18.0182;
 
   String get status {
@@ -190,7 +192,8 @@ class AidexProtocol extends CgmProtocol {
     // mfg payload：company(2) 已被 FlutterBluePlus 剥离为 key，
     // 剩余：minfromstart(2) status(1) calTemp(1) trend(1) glucose(2) quality(1) ...
     int o = 0;
-    o += 2; // minFromStart：发射器启动分钟数，仅去重参考
+    final minFromStart = mfg[o] | (mfg[o + 1] << 8);
+    o += 2;
     // final status = mfg[o]; o += 1;
     o += 1; // status
     o += 1; // calTemp
@@ -215,13 +218,14 @@ class AidexProtocol extends CgmProtocol {
                 : rate <= -1
                     ? 3
                     : 0;
-    // minFromStart 是发射器启动分钟数，仅用于去重参考
+    // minFromStart 是发射器启动分钟数，用于去重（数值不变也要每分钟收一条）
     return GlucoseReading(
       valueMgDl: glucose.toDouble(),
       timestamp: DateTime.now(),
       trend: trend,
       brand: brand,
       quality: quality,
+      minFromStart: minFromStart,
     );
   }
 }
@@ -503,18 +507,21 @@ class BleCgmManager {
   StreamSubscription<List<ScanResult>>? _scanSub;
 
   // 去重：同一数值 60 秒内只收一次（AiDEX 广播几秒一次，不去重会刷屏）
-  GlucoseReading? _lastEmitted;
+  // 注意：按“分钟序号(minFromStart)”去重，而不是按数值——
+  // 数值长时间不变也必须每分钟收一条，否则曲线成断点、数值"一直不变"
+  int? _lastMinFromStart;
   DateTime _lastEmittedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _shouldEmit(GlucoseReading r) {
     final now = DateTime.now();
-    if (_lastEmitted != null &&
-        _lastEmitted!.valueMgDl == r.valueMgDl &&
-        _lastEmitted!.brand == r.brand &&
+    // 同一分钟序号 60 秒内只收一次（广播几秒一次，防刷屏）；
+    // 分钟序号变了就收——数值不变也要收，否则曲线断点
+    if (_lastMinFromStart != null &&
+        _lastMinFromStart == r.minFromStart &&
         now.difference(_lastEmittedAt).inSeconds < 60) {
       return false;
     }
-    _lastEmitted = r;
+    _lastMinFromStart = r.minFromStart;
     _lastEmittedAt = now;
     return true;
   }
@@ -549,10 +556,11 @@ class BleCgmManager {
     } catch (_) {}
 
     _setState(BleCgmState.scanning);
-    _log('开始扫描…（AiDEX/微泰二代靠近手机即自动读数）');
-    _log('同时打开微泰 App 确认发射器在广播（能看到数值即正常）');
+    _log('开始监听…（AiDEX/微泰二代广播自动收数，无需配对）');
+    _log('注意：微泰官方 App 会独占发射器——扫之前先杀掉它');
 
-    // 3. 通配扫描：不过滤 service（部分手机过滤会漏广播），靠 matches() 判定
+    // AiDEX 是被动广播：continuousScan 持续监听，不设 timeout，
+    // 点"断开"才停。数值每分钟变一次（minFromStart 递增即新数据）。
     await _scanSub?.cancel();
     await FlutterBluePlus.stopScan().catchError((_) {});
     final seen = <String>{};
@@ -578,7 +586,7 @@ class BleCgmManager {
             if (!protocol.matches(r)) continue;
             final name = advName.isEmpty ? id : advName;
             if (protocol.isAdvertisementBased) {
-              // 被动广播：直接解析（同值 60 秒去重，防刷屏）
+              // 被动广播：直接解析（同分钟去重，数值不变也每分钟收一条）
               protocol.parseAdvertisement(r).then((reading) {
                 if (reading != null && _shouldEmit(reading)) {
                   _readingController.add(reading);
@@ -597,9 +605,12 @@ class BleCgmManager {
         }
       });
       await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 60),
+        continuousUpdates: true,
+        removeIfGone: const Duration(minutes: 2),
+        // 不设 timeout：持续监听，点"断开"才停
+        androidScanMode: AndroidScanMode.lowLatency,
       );
-      _log('扫描已启动，60 秒内靠近的蓝牙设备都会列出来…');
+      _log('监听已启动：发射器每分钟广播一次，有新数自动入库…');
     } catch (e) {
       final msg = '启动扫描失败：$e';
       _log(msg);
@@ -607,17 +618,6 @@ class BleCgmManager {
       return msg;
     }
 
-    Future.delayed(const Duration(seconds: 61), () async {
-      await FlutterBluePlus.stopScan().catchError((_) {});
-      if (_state == BleCgmState.scanning) {
-        if (resultCount == 0) {
-          _log('60 秒一个设备都没扫到：可能被微泰 App 独占，去系统设置里把微泰 App 的蓝牙权限关掉再扫');
-        } else {
-          _log('60 秒扫描结束：没识别到 CGM，请把日志里"附近："的设备名发过来');
-        }
-        _setState(BleCgmState.idle);
-      }
-    });
     return null;
   }
 

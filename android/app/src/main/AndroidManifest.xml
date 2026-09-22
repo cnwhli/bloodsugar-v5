@@ -7,6 +7,10 @@
     <!-- 定位：Android 6~11 BLE 扫描必需 -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 震动：超阈值报警 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 声音：audioplayers 需网络播放在线提示音时用 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- 兼容旧版本 -->
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
