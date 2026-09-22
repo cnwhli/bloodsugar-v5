@@ -4,6 +4,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
+import '../../services/health_bridge.dart';
 
 /// 后台收数前台服务入口（独立 isolate，App 退后台/锁屏也跑）
 @pragma('vm:entry-point')
@@ -19,10 +20,13 @@ class CgmBackgroundHandler extends TaskHandler {
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     _m = BleCgmManager();
     await AppDatabase.init();
-    // 后台只做一件事：收数 → 入库。UI 由各页订阅 readingStream 自己刷。
+    await HealthBridge.ensureAuth();
+    // 后台只做两件事：收数 → 入库 + 同步写系统健康平台（供手表官方表盘读）。
+    // UI 由各页订阅 readingStream 自己刷。
     _sub = _m!.readingStream.listen((r) async {
       try {
         await AppDatabase.instance.insertReading(r);
+        await HealthBridge.writeGlucose(r.valueMmolL, r.timestamp);
         await AlertService().check(r.valueMmolL);
       } catch (_) {}
     });

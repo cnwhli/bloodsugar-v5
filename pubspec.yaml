@@ -36,10 +36,12 @@ dependencies:
   uuid: ^4.3.0
   permission_handler: ^11.3.0
   flutter_foreground_task: ^9.1.0
+  flutter_overlay_window: ^0.5.0
   http: ^1.2.1
   shared_preferences: ^2.3.2
   flutter_secure_storage: ^9.2.2
   audioplayers: ^6.1.0
+  health: ^13.3.1
 
 dev_dependencies:
   flutter_test:

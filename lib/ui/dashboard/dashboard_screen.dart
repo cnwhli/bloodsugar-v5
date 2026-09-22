@@ -105,6 +105,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  /// 曲线横轴时间刻度：只取 HH:MM
+  String _axisTime(String s) {
+    try {
+      final ts = DateTime.parse(s);
+      return '${ts.hour.toString().padLeft(2, '0')}:'
+          '${ts.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return s.length >= 19 ? s.substring(11, 16) : s;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -269,7 +280,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           bottomTitles: AxisTitles(
-              sideTitles: SideTitles(showTitles: false)),
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 28,
+              interval: 1,
+              // 时间轴：按 HH:MM 显示首/中/末三个点
+              getTitlesWidget: (v, meta) {
+                final idx = v.toInt();
+                final n = _history.length;
+                if (n < 2) return const SizedBox.shrink();
+                final show = idx == 0 ||
+                    idx == n - 1 ||
+                    idx == n ~/ 2;
+                if (!show) return const SizedBox.shrink();
+                final t = _axisTime(
+                    '${_history[idx.clamp(0, n - 1)]['created_at'] ?? ''}');
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    t,
+                    style: const TextStyle(
+                        fontSize: 10, color: Colors.grey),
+                  ),
+                );
+              },
+            ),
+          ),
           topTitles:
               AxisTitles(sideTitles: SideTitles(showTitles: false)),
           rightTitles:

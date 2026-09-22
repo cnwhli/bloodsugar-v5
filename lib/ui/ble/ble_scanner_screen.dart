@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
+import '../../services/health_bridge.dart';
 import 'cgm_foreground_service.dart';
+import 'glucose_overlay.dart';
 
 /// BLE 扫描 + 连接页面（多品牌 CGM）
 ///
@@ -52,6 +54,11 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         if (_readings.length > 100) _readings.removeLast();
       });
       await AppDatabase.instance.insertReading(reading);
+      // 系统健康平台同步（OPPO Watch X 官方血糖表盘只能从这里读数）
+      HealthBridge.writeGlucose(reading.valueMmolL, reading.timestamp);
+      // 悬浮窗同步最新值（含时间）
+      GlucoseOverlay.push(reading.valueMmolL, reading.trend,
+          _fmtTime(reading.timestamp));
       // 超阈值报警（震动/声音/震动+声音，由设置页决定）
       if (mounted) {
         final msg = await AlertService().check(reading.valueMmolL);
@@ -170,27 +177,70 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           // 操作按钮：扫描=前台持续监听+后台前台服务（退后台/锁屏继续收）
           Padding(
             padding: const EdgeInsets.all(8),
-            child: Row(
+            child: Column(
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () async {
-                      await _manager.startScan();
-                      await CgmForegroundService.start();
-                    },
-                    icon: const Icon(Icons.bluetooth_searching),
-                    label: const Text('扫描'),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          await _manager.startScan();
+                          await CgmForegroundService.start();
+                        },
+                        icon: const Icon(Icons.bluetooth_searching),
+                        label: const Text('扫描'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          await CgmForegroundService.stop();
+                          await _manager.disconnect();
+                        },
+                        icon: const Icon(Icons.bluetooth_disabled),
+                        label: const Text('断开'),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
+                const SizedBox(height: 8),
+                // 悬浮窗开关：切到别的 App 也能看到血糖（含时间）
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
                     onPressed: () async {
-                      await CgmForegroundService.stop();
-                      await _manager.disconnect();
+                      if (GlucoseOverlay.isShowing) {
+                        await GlucoseOverlay.hide();
+                        setState(() {});
+                      } else {
+                        final ok =
+                            await GlucoseOverlay.ensurePermission();
+                        if (!mounted) return;
+                        if (!ok) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text(
+                                    '请在系统设置中允许"显示在其他应用上层"')),
+                          );
+                          return;
+                        }
+                        await GlucoseOverlay.show();
+                        // 打开即推一条当前值，避免空窗
+                        if (_readings.isNotEmpty && mounted) {
+                          GlucoseOverlay.push(
+                              _readings.first.valueMmolL,
+                              _readings.first.trend,
+                              _fmtTime(
+                                  _readings.first.timestamp));
+                        }
+                        setState(() {});
+                      }
                     },
-                    icon: const Icon(Icons.bluetooth_disabled),
-                    label: const Text('断开'),
+                    icon: const Icon(Icons.picture_in_picture_alt),
+                    label: Text(GlucoseOverlay.isShowing
+                        ? '关闭悬浮窗'
+                        : '开启悬浮窗'),
                   ),
                 ),
               ],

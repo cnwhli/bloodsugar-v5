@@ -14,8 +14,10 @@
         "flutter",
         "flutter_blue_plus",
         "flutter_foreground_task",
+        "flutter_overlay_window",
         "flutter_secure_storage",
         "google_fonts",
+        "health",
         "http",
         "intl",
         "path_provider",
@@ -186,6 +188,23 @@
         "http_parser",
         "meta",
         "web"
+      ]
+    },
+    {
+      "name": "flutter_overlay_window",
+      "version": "0.5.0",
+      "dependencies": [
+        "flutter"
+      ]
+    },
+    {
+      "name": "flutter_foreground_task",
+      "version": "9.2.2",
+      "dependencies": [
+        "flutter",
+        "platform",
+        "plugin_platform_interface",
+        "shared_preferences"
       ]
     },
     {
@@ -1005,6 +1024,20 @@
       ]
     },
     {
+      "name": "platform",
+      "version": "3.2.0",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
+      "name": "plugin_platform_interface",
+      "version": "2.1.8",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
       "name": "permission_handler_platform_interface",
       "version": "4.4.1",
       "dependencies": [
@@ -1385,13 +1418,6 @@
       ]
     },
     {
-      "name": "plugin_platform_interface",
-      "version": "2.1.8",
-      "dependencies": [
-        "meta"
-      ]
-    },
-    {
       "name": "win32",
       "version": "5.15.0",
       "dependencies": [
@@ -1402,13 +1428,6 @@
       "name": "ffi",
       "version": "2.2.0",
       "dependencies": []
-    },
-    {
-      "name": "platform",
-      "version": "3.2.0",
-      "dependencies": [
-        "meta"
-      ]
     },
     {
       "name": "xdg_directories",
@@ -1711,13 +1730,56 @@
       ]
     },
     {
-      "name": "flutter_foreground_task",
-      "version": "9.2.2",
+      "name": "health",
+      "version": "13.3.1",
+      "dependencies": [
+        "carp_serializable",
+        "device_info_plus",
+        "flutter",
+        "intl",
+        "json_annotation"
+      ]
+    },
+    {
+      "name": "carp_serializable",
+      "version": "2.0.1",
       "dependencies": [
         "flutter",
-        "platform",
-        "plugin_platform_interface",
-        "shared_preferences"
+        "json_annotation",
+        "meta"
+      ]
+    },
+    {
+      "name": "device_info_plus",
+      "version": "12.4.0",
+      "dependencies": [
+        "device_info_plus_platform_interface",
+        "ffi",
+        "file",
+        "flutter",
+        "flutter_web_plugins",
+        "meta",
+        "web",
+        "win32",
+        "win32_registry"
+      ]
+    },
+    {
+      "name": "win32_registry",
+      "version": "2.1.0",
+      "dependencies": [
+        "ffi",
+        "meta",
+        "win32"
+      ]
+    },
+    {
+      "name": "device_info_plus_platform_interface",
+      "version": "7.0.3",
+      "dependencies": [
+        "flutter",
+        "meta",
+        "plugin_platform_interface"
       ]
     }
   ],
