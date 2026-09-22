@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.cnwhli.bloodsugar_v5"
-    compileSdk = flutter.compileSdkVersion
+    // vibration/audioplayers 依赖 androidx.fragment:1.7.1，要求 compileSdk ≥ 34
+    compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
