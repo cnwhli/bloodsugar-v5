@@ -150,6 +150,13 @@ const Map<int, int> trendMap = {
 };
 
 // ==================== AiDEX X / LinX（微泰二代）====================
+/// 连接方式（对标"与糖"APP + Juggluco aidexx）：
+/// 1. 发射器名如 AiDEX x-22222FJV7J，配对码 = 名字最后 6 位（见发射器贴纸）。
+/// 2. 先 GATT 连接（ bonding 配对，一次即可，系统记住密钥），
+/// 3. 配对成功后发射器才在 0x181F 广播里放明文血糖（62 字节，1 分钟一次）——
+///    这就是"配对后免连、听广播就行"的真相：与糖也是这样，配对一次、以后被动收。
+/// 4. 所以"扫描"是两步：先扫到名（配对）→ 再持续听广播（收数）。
+///    配对信息（MAC + 6位码）存本机，下次自动认，不用再输。
 /// Juggluco aidexx/glucose.h：
 /// 广播 62 字节：flags + service 0x181F + manufacturer(Nordic 0x0059) +
 /// LastPast{minfromstart u16, status u8, calTemp u8, trend i8,
@@ -490,6 +497,17 @@ class BleCgmManager {
   final _readingController = StreamController<GlucoseReading>.broadcast();
   final _logController = StreamController<String>.broadcast();
 
+  // 页面切换/切后台不丢数据：读数缓存在 manager（单例）里，页面只订阅显示
+  final List<GlucoseReading> _history = [];
+  List<GlucoseReading> get history => List.unmodifiable(_history);
+  void _emitReading(GlucoseReading r) {
+    _history.insert(0, r);
+    if (_history.length > 200) _history.removeLast();
+    if (!_readingController.isClosed) _readingController.add(r);
+  }
+
+  bool _managerDisposed = false;
+
   BleCgmState get state => _state;
   Stream<BleCgmState> get stateStream => _stateController.stream;
   Stream<GlucoseReading> get readingStream => _readingController.stream;
@@ -589,7 +607,7 @@ class BleCgmManager {
               // 被动广播：直接解析（同分钟去重，数值不变也每分钟收一条）
               protocol.parseAdvertisement(r).then((reading) {
                 if (reading != null && _shouldEmit(reading)) {
-                  _readingController.add(reading);
+                  _emitReading(reading);
                   _log('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · '
                       '${reading.brand.displayName} · 广播');
                 }
@@ -638,16 +656,24 @@ class BleCgmManager {
     }
   }
 
-  /// 断开连接
+  /// 断开/停止：停扫描 + 断 GATT。切页面不调这个，只有点"断开"和退出才调。
   Future<void> disconnect() async {
+    await _scanSub?.cancel();
+    _scanSub = null;
+    await FlutterBluePlus.stopScan().catchError((_) {});
     await _connectedDevice?.disconnect();
     _connectedDevice = null;
     _connecting.clear();
     _setState(BleCgmState.idle);
+    _log('已停止监听');
   }
 
-  /// 释放资源
+  /// 释放资源——注意：页面切换不要调这个！只有 App 彻底退出才调。
+  /// BleScannerScreen.dispose 已改为空，manager 随 App 单例常驻，
+  /// 后台监听 + 省电轮询靠 stopScan()/startLowPowerWatch() 控制。
   void dispose() {
+    if (_managerDisposed) return;
+    _managerDisposed = true;
     _stateController.close();
     _readingController.close();
     _logController.close();

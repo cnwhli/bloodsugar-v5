@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
@@ -21,23 +23,27 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   List<GlucoseReading> _readings = [];
   String _statusText = '就绪';
   List<String> _log = [];
+  final List<StreamSubscription> _subs = [];
 
   @override
   void initState() {
     super.initState();
     AppDatabase.init();
-    _manager.stateStream.listen((state) {
+    // manager 是单例常驻：进来先把缓存的历史读数铺上（页面切换不丢）
+    _readings = List.of(_manager.history);
+    _statusText = _manager.state.toString().split('.').last;
+    _subs.add(_manager.stateStream.listen((state) {
       if (!mounted) return;
       setState(() => _statusText = state.toString().split('.').last);
-    });
-    _manager.logStream.listen((msg) {
+    }));
+    _subs.add(_manager.logStream.listen((msg) {
       if (!mounted) return;
       setState(() {
         _log.add(msg);
         if (_log.length > 50) _log.removeAt(0);
       });
-    });
-    _manager.readingStream.listen((reading) async {
+    }));
+    _subs.add(_manager.readingStream.listen((reading) async {
       if (!mounted) return;
       setState(() {
         _readings.insert(0, reading);
@@ -63,12 +69,16 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           );
         }
       }
-    });
+    })); // readingStream.listen 结束
   }
 
   @override
   void dispose() {
-    _manager.dispose();
+    // 只取消页面自己的订阅，不关 manager：监听在后台继续跑，
+    // 切回来从 manager.history 恢复显示。App 退出才停（见 disconnect 按钮）。
+    for (final s in _subs) {
+      s.cancel();
+    }
     super.dispose();
   }
 
