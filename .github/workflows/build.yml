@@ -4,9 +4,25 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: '构建哪个平台（android/ios/web/all），默认只打安卓'
+        required: false
+        default: 'android'
+        type: choice
+        options:
+          - android
+          - ios
+          - web
+          - all
 
 jobs:
   android:
+    # push 默认只打安卓（最快）；手动可选 all 全打；ios/web 只在手动指定时跑
+    if: >-
+      github.event_name == 'push' ||
+      inputs.platform == 'android' ||
+      inputs.platform == 'all'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +46,7 @@ jobs:
           files: build/app/outputs/flutter-apk/app-release.apk
 
   ios:
+    if: inputs.platform == 'ios' || inputs.platform == 'all'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +66,7 @@ jobs:
           path: build/ios/**/app-unsigned.ipa
 
   web:
+    if: inputs.platform == 'web' || inputs.platform == 'all'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
