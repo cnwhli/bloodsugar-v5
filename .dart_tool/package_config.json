@@ -302,12 +302,6 @@
       "languageVersion": "3.0"
     },
     {
-      "name": "file_picker",
-      "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/file_picker-11.0.3",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
-    },
-    {
       "name": "fixnum",
       "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/fixnum-1.1.1",
       "packageUri": "lib/",
@@ -378,12 +372,6 @@
       "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/flutter_overlay_window-0.5.0",
       "packageUri": "lib/",
       "languageVersion": "2.16"
-    },
-    {
-      "name": "flutter_plugin_android_lifecycle",
-      "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/flutter_plugin_android_lifecycle-2.0.35",
-      "packageUri": "lib/",
-      "languageVersion": "3.10"
     },
     {
       "name": "flutter_secure_storage",

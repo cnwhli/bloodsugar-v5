@@ -93,10 +93,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             subtitle: const Text('无服务器：微信发给自己，换手机不丢数'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
-              final n = await CsvBackup.exportAll();
+              await CsvBackup.exportAll();
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('已导出 $n 条，发给自己保存好')),
+                  const SnackBar(content: Text('已导出 CSV，发给自己保存好')),
                 );
               }
             },
@@ -107,12 +107,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
             subtitle: const Text('官方 App 历史/以前的备份，一键补进来'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
-              final n = await CsvBackup.importFile();
+              final n = await CsvBackup.importFromDocDir();
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                       content: Text(
-                          n >= 0 ? '补入 $n 条历史（重复的自动跳过）' : '已取消')),
+                          n >= 0 ? '补入 $n 条历史（重复的自动跳过）' : '未找到文件，请先复制到 App 目录')),
                 );
               }
               _load();
