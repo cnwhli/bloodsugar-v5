@@ -139,22 +139,6 @@
       ]
     },
     {
-      "name": "file_picker",
-      "version": "11.0.3",
-      "dependencies": [
-        "cross_file",
-        "dbus",
-        "ffi",
-        "flutter",
-        "flutter_plugin_android_lifecycle",
-        "flutter_web_plugins",
-        "path",
-        "plugin_platform_interface",
-        "web",
-        "win32"
-      ]
-    },
-    {
       "name": "share_plus",
       "version": "12.0.2",
       "dependencies": [
@@ -914,32 +898,25 @@
       "dependencies": []
     },
     {
-      "name": "plugin_platform_interface",
-      "version": "2.1.8",
-      "dependencies": [
-        "meta"
-      ]
-    },
-    {
-      "name": "flutter_web_plugins",
-      "version": "0.0.0",
-      "dependencies": [
-        "flutter"
-      ]
-    },
-    {
       "name": "ffi",
       "version": "2.2.0",
       "dependencies": []
     },
     {
-      "name": "dbus",
-      "version": "0.7.15",
+      "name": "url_launcher_platform_interface",
+      "version": "2.3.2",
       "dependencies": [
-        "args",
-        "ffi",
+        "flutter",
+        "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "url_launcher_linux",
+      "version": "3.2.3",
+      "dependencies": [
+        "flutter",
         "meta",
-        "xml"
+        "url_launcher_platform_interface"
       ]
     },
     {
@@ -962,20 +939,11 @@
       ]
     },
     {
-      "name": "url_launcher_platform_interface",
-      "version": "2.3.2",
+      "name": "file",
+      "version": "7.0.1",
       "dependencies": [
-        "flutter",
-        "plugin_platform_interface"
-      ]
-    },
-    {
-      "name": "url_launcher_linux",
-      "version": "3.2.3",
-      "dependencies": [
-        "flutter",
         "meta",
-        "url_launcher_platform_interface"
+        "path"
       ]
     },
     {
@@ -992,11 +960,18 @@
       ]
     },
     {
-      "name": "file",
-      "version": "7.0.1",
+      "name": "flutter_web_plugins",
+      "version": "0.0.0",
+      "dependencies": [
+        "flutter"
+      ]
+    },
+    {
+      "name": "cross_file",
+      "version": "0.3.5+5",
       "dependencies": [
         "meta",
-        "path"
+        "web"
       ]
     },
     {
@@ -1226,6 +1201,13 @@
     {
       "name": "platform",
       "version": "3.2.0",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
+      "name": "plugin_platform_interface",
+      "version": "2.1.8",
       "dependencies": [
         "meta"
       ]
@@ -1590,15 +1572,6 @@
       ]
     },
     {
-      "name": "xml",
-      "version": "7.0.1",
-      "dependencies": [
-        "collection",
-        "meta",
-        "petitparser"
-      ]
-    },
-    {
       "name": "win32_registry",
       "version": "2.1.0",
       "dependencies": [
@@ -1764,14 +1737,6 @@
       "dependencies": []
     },
     {
-      "name": "petitparser",
-      "version": "7.0.2",
-      "dependencies": [
-        "collection",
-        "meta"
-      ]
-    },
-    {
       "name": "hooks",
       "version": "2.0.2",
       "dependencies": [
@@ -1818,6 +1783,16 @@
       ]
     },
     {
+      "name": "dbus",
+      "version": "0.7.15",
+      "dependencies": [
+        "args",
+        "ffi",
+        "meta",
+        "xml"
+      ]
+    },
+    {
       "name": "record_use",
       "version": "0.6.0",
       "dependencies": [
@@ -1835,11 +1810,35 @@
       ]
     },
     {
-      "name": "cross_file",
-      "version": "0.3.5+5",
+      "name": "xml",
+      "version": "7.0.1",
       "dependencies": [
+        "collection",
         "meta",
-        "web"
+        "petitparser"
+      ]
+    },
+    {
+      "name": "petitparser",
+      "version": "7.0.2",
+      "dependencies": [
+        "collection",
+        "meta"
+      ]
+    },
+    {
+      "name": "file_picker",
+      "version": "8.3.7",
+      "dependencies": [
+        "cross_file",
+        "ffi",
+        "flutter",
+        "flutter_plugin_android_lifecycle",
+        "flutter_web_plugins",
+        "path",
+        "plugin_platform_interface",
+        "web",
+        "win32"
       ]
     },
     {

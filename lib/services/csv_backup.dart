@@ -32,7 +32,7 @@ class CsvBackup {
   /// 导入 CSV（本 App 导出的 / 官方 App 导出的整理成 time,mmol 列即可）。
   /// 返回补入条数；-1 = 用户取消选择。
   static Future<int> importFile() async {
-    final picked = await FilePicker.pickFiles(
+    final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['csv'],
     );
