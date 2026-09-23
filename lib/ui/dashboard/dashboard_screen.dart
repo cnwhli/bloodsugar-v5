@@ -295,7 +295,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   _navButton(Icons.bluetooth, '连接血糖仪', '/ble'),
                   _navButton(Icons.add_circle, '手动录入', '/add'),
-                  _navButton(Icons.people, '社区', '/community'),
+                  _navButton(Icons.people, '糖友微信群', '/community'),
                   _navButton(Icons.smart_toy, 'AI 助手', '/ai-assistant'),
                   _navButton(
                       Icons.medical_services, '泵配对', '/pump-pair'),

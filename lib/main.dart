@@ -13,7 +13,7 @@ import 'package:bloodsugar_v5/ui/ble/dose_confirmation_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/manual_bolus_screen.dart';
 import 'package:bloodsugar_v5/ui/watch/watch_glucose_page.dart';
 import 'package:bloodsugar_v5/ui/chat/chat_screen.dart';
-import 'package:bloodsugar_v5/ui/community/community_feed_screen.dart';
+import 'package:bloodsugar_v5/ui/community/wechat_group_screen.dart';
 import 'package:bloodsugar_v5/ui/profile/profile_screen.dart';
 import 'package:bloodsugar_v5/ui/profile/alert_settings_screen.dart';
 import 'package:bloodsugar_v5/services/rag_service.dart';
@@ -131,7 +131,7 @@ class BloodSugarApp extends StatelessWidget {
             ),
         '/pump-pair': (context) => PumpPairScreen(brand: PumpBrand.danaR),
         '/manual-bolus': (context) => const ManualBolusScreen(),
-        '/community': (context) => const CommunityFeedScreen(),
+        '/community': (context) => const WechatGroupScreen(),
         '/ai-assistant': (context) => const AiHealthAssistantScreen(),
         '/alert-settings': (context) => const AlertSettingsScreen(),
         // 自研表盘页：手机可预览；OPPO Watch X 装同包打开即用，可脱离手机独立监听
