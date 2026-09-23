@@ -32,6 +32,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../data/datasource/local_db.dart';
 
 // 128-bit 展开：16-bit UUID -> 标准 base UUID
 String _u16(String hex) =>
@@ -147,8 +148,15 @@ abstract class CgmProtocol {
   /// 连接型：从 notify 数据解析血糖
   Future<GlucoseReading?> parseReading(Uint8List data) async => null;
 
-  /// 广播型：从广播包解析血糖
+  /// 广播型：从广播包解析血糖（默认只取当前点；AiDEX 重写取 3 点）
   Future<GlucoseReading?> parseAdvertisement(ScanResult r) async => null;
+
+  /// 广播型多点解析：一个广播包里带的历史点也一起收回来。
+  /// 默认实现 = 单点（parseAdvertisement）；AiDEX 重写返回 [当前, 前1分, 前2分]。
+  Future<List<GlucoseReading>> parseAdvertisementAll(ScanResult r) async {
+    final one = await parseAdvertisement(r);
+    return one == null ? const [] : [one];
+  }
 
   /// 连接型：建连 + 握手 + 订阅（默认实现：发现服务→订阅 notify）
   Future<void> handleDevice(
@@ -229,15 +237,17 @@ class AidexProtocol extends CgmProtocol {
   }
 
   @override
-  Future<GlucoseReading?> parseAdvertisement(ScanResult r) async {
+  Future<List<GlucoseReading>> parseAdvertisementAll(ScanResult r) async {
     final mfg = r.advertisementData.manufacturerData[0x0059];
-    if (mfg == null || mfg.length < 10) return null;
-    // mfg payload：company(2) 已被 FlutterBluePlus 剥离为 key，
-    // 剩余：minfromstart(2) status(1) calTemp(1) trend(1) glucose(2) quality(1) ...
+    if (mfg == null || mfg.length < 15) return const [];
+    // LastPast（当前分钟）: minfromstart(2) status(1) calTemp(1) trend(1)
+    // glucose(2) quality(1)，之后紧跟 prev[0]、prev[1]（各 3 字节：
+    // glucose:10/unknown:5/valid:1 + quality(1)），分别对应前 1、2 分钟。
+    final out = <GlucoseReading>[];
+    final now = DateTime.now();
     int o = 0;
     final minFromStart = mfg[o] | (mfg[o + 1] << 8);
     o += 2;
-    // final status = mfg[o]; o += 1;
     o += 1; // status
     o += 1; // calTemp
     var trendRaw = mfg[o];
@@ -248,9 +258,7 @@ class AidexProtocol extends CgmProtocol {
     final glucose = g0 | ((g1 & 0x03) << 8); // 10-bit mg/dL
     final valid = (g1 >> 7) & 0x01;
     final quality = mfg[o];
-    if (valid != 1) return null;
-    if (glucose < 18 || glucose > 800) return null; // aidexXlowest/highest
-    // trend: rate = trend × 0.1 mg/dL/min → 映射 App 趋势
+    o += 1;
     final rate = trendRaw * 0.1;
     final trend = rate >= 2
         ? 2
@@ -261,15 +269,43 @@ class AidexProtocol extends CgmProtocol {
                 : rate <= -1
                     ? 3
                     : 0;
-    // minFromStart 是发射器启动分钟数，用于去重（数值不变也要每分钟收一条）
-    return GlucoseReading(
-      valueMgDl: glucose.toDouble(),
-      timestamp: DateTime.now(),
-      trend: trend,
-      brand: brand,
-      quality: quality,
-      minFromStart: minFromStart,
-    );
+    if (valid == 1 && glucose >= 18 && glucose <= 800) {
+      out.add(GlucoseReading(
+        valueMgDl: glucose.toDouble(),
+        timestamp: now,
+        trend: trend,
+        brand: brand,
+        quality: quality,
+        minFromStart: minFromStart,
+      ));
+    }
+    // prev 两分钟：时间戳按分钟回拨，保证曲线不断点
+    for (var i = 0; i < 2; i++) {
+      if (o + 3 > mfg.length) break;
+      final p0 = mfg[o], p1 = mfg[o + 1];
+      final pq = mfg[o + 2];
+      o += 3;
+      final pg = p0 | ((p1 & 0x03) << 8);
+      final pv = (p1 >> 7) & 0x01;
+      final pm = minFromStart - (i + 1);
+      if (pv == 1 && pg >= 18 && pg <= 800 && pm >= 0) {
+        out.add(GlucoseReading(
+          valueMgDl: pg.toDouble(),
+          timestamp: now.subtract(Duration(minutes: i + 1)),
+          trend: 0, // 历史点无趋势字节，画平
+          brand: brand,
+          quality: pq,
+          minFromStart: pm,
+        ));
+      }
+    }
+    return out;
+  }
+
+  @override
+  Future<GlucoseReading?> parseAdvertisement(ScanResult r) async {
+    final all = await parseAdvertisementAll(r);
+    return all.isEmpty ? null : all.first;
   }
 }
 
@@ -542,6 +578,36 @@ class BleCgmManager {
     if (!_readingController.isClosed) _readingController.add(r);
   }
 
+  /// 历史补洞通道：广播包里带的 prev 点（前 1/2 分钟）批量入库。
+  /// 只补库里没有的序号（按 minFromStart 判重），不进 _history、不发通知、
+  /// 不触发报警——避免刚打开 App 时旧点刷屏、报警误报。
+  /// 回调 onBackfilled 让页面有机会刷新曲线（节流后调用）。
+  void Function(int count)? onBackfilled;
+
+  DateTime _lastBackfillNotify = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _backfillHistory(List<GlucoseReading> olds) async {
+    var added = 0;
+    for (final r in olds) {
+      try {
+        final ok =
+            await AppDatabase.instance.insertReadingDedup(r);
+        if (ok) added++;
+      } catch (_) {}
+    }
+    if (added > 0) {
+      final now = DateTime.now();
+      // 补洞通知节流 30 秒：广播几秒一次，每次都刷新页面太浪费
+      if (now.difference(_lastBackfillNotify).inSeconds >= 30) {
+        _lastBackfillNotify = now;
+        try {
+          onBackfilled?.call(added);
+        } catch (_) {}
+        _log('补回历史 $added 条');
+      }
+    }
+  }
+
   bool _managerDisposed = false;
 
   BleCgmState get state => _state;
@@ -675,11 +741,18 @@ class BleCgmManager {
           if (!protocol.matches(r)) continue;
           final name = advName.isEmpty ? id : advName;
           if (protocol.isAdvertisementBased) {
-            protocol.parseAdvertisement(r).then((reading) {
-              if (reading != null && _shouldEmit(reading)) {
-                _emitReading(reading);
-                _log('${reading.valueMmolL.toStringAsFixed(1)} mmol/L · '
-                    '${reading.brand.displayName} · 广播');
+            // 多点解析：广播包里带的 prev 历史点也一起收（App 刚开/中间漏扫时补洞）。
+            // 同序号去重（_shouldEmit）只放行当前分钟的新点；历史点走批量补洞通道。
+            protocol.parseAdvertisementAll(r).then((readings) {
+              if (readings.isEmpty) return;
+              final fresh = readings.first;
+              if (_shouldEmit(fresh)) {
+                _emitReading(fresh);
+                _log('${fresh.valueMmolL.toStringAsFixed(1)} mmol/L · '
+                    '${fresh.brand.displayName} · 广播');
+              }
+              if (readings.length > 1) {
+                _backfillHistory(readings.sublist(1));
               }
             });
           } else {

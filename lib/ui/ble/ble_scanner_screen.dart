@@ -34,6 +34,10 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   void initState() {
     super.initState();
     AppDatabase.init();
+    // 历史补洞回调：广播包里带的前 1/2 分钟点入库后，列表自动补上
+    _manager.onBackfilled = (_) {
+      if (mounted) _reloadFromDb();
+    };
     // manager 是单例常驻：先铺内存缓存，再从数据库补（App 重启也不丢）
     _readings = List.of(_manager.history);
     _reloadFromDb();
@@ -109,6 +113,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   void dispose() {
     // 只取消页面自己的订阅，不关 manager：监听在后台继续跑，
     // 切回来从 manager.history 恢复显示。App 退出才停（见 disconnect 按钮）。
+    _manager.onBackfilled = null; // 补洞回调随页面解绑（manager 常驻，回调不能留野指针）
     WidgetsBinding.instance.removeObserver(_lifecycleObs);
     for (final s in _subs) {
       s.cancel();
