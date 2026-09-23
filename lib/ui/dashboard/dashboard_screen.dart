@@ -145,43 +145,95 @@ class _DashboardScreenState extends State<DashboardScreen> {
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              // 血糖圆环
-              CircleAvatar(
-                radius: 80,
-                backgroundColor: _statusColor.withValues(alpha: 0.15),
-                child: Center(
-                  child: Text(
-                    _currentGlucose > 0
-                        ? _currentGlucose.toStringAsFixed(1)
-                        : '--',
-                    style: TextStyle(
-                      fontSize: 48,
-                      fontWeight: FontWeight.bold,
-                      color: _statusColor,
-                    ),
+              // 顶部大数值卡片（仿微泰/硅基：大数字 + mg/dL + 趋势箭头 + 时间）
+              Card(
+                color: _statusColor.withValues(alpha: 0.12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 16, horizontal: 12),
+                  child: Row(
+                    mainAxisAlignment:
+                        MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // 左：大数值 + 单位
+                      Column(
+                        children: [
+                          Row(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.baseline,
+                            textBaseline:
+                                TextBaseline.alphabetic,
+                            children: [
+                              Text(
+                                _currentGlucose > 0
+                                    ? _currentGlucose
+                                        .toStringAsFixed(1)
+                                    : '--',
+                                style: TextStyle(
+                                  fontSize: 56,
+                                  fontWeight: FontWeight.bold,
+                                  color: _statusColor,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'mmol/L',
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    color: _statusColor),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _currentGlucose > 0
+                                ? '${(_currentGlucose * 18.0182).toStringAsFixed(0)} mg/dL'
+                                : '',
+                            style: const TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                      // 右：趋势 + 范围状态 + 时间
+                      Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: [
+                          Text(_trend,
+                              style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  color: _statusColor)),
+                          const SizedBox(height: 4),
+                          Text(
+                            _currentGlucose <= 0
+                                ? ''
+                                : _currentGlucose < 3.9
+                                    ? '● 偏低'
+                                    : _currentGlucose > 10.0
+                                        ? '● 偏高'
+                                        : '● 范围内',
+                            style: TextStyle(
+                                fontSize: 14,
+                                color: _statusColor),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _latestTime.isNotEmpty
+                                ? '更新于 $_latestTime'
+                                : '',
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(_trend, style: const TextStyle(fontSize: 18)),
-              const SizedBox(height: 4),
-              Text(
-                _currentGlucose > 0
-                    ? '${(_currentGlucose * 18.0182).toStringAsFixed(0)} mg/dL'
-                    : '',
-                style: const TextStyle(fontSize: 14, color: Colors.grey),
-              ),
-              // 最新读数时间
-              if (_latestTime.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    '更新于 $_latestTime',
-                    style: const TextStyle(
-                        fontSize: 12, color: Colors.grey),
-                  ),
-                ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
 
               // 24 小时曲线
               Card(
@@ -262,13 +314,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildChart() {
     if (_history.length < 2) {
       return const Center(
-        child: Text('数据不足两点，连接血糖仪后自动绘制',
-            style: TextStyle(color: Colors.grey, fontSize: 13)),
-      );
+          child: Text('数据不足两点，连接血糖仪后自动绘制',
+              style: TextStyle(color: Colors.grey, fontSize: 13)));
     }
     final spots = <FlSpot>[];
-    // X 轴用真实时间（相对首点的分钟数）：断连的空档会在曲线上留出缺口，
-    // 刻度也是从真实时间反推的——这才是"按时间显示"，之前是按序号画的
+    // X 轴用真实时间（相对首点的分钟数）：断连的空档会在曲线上留出缺口——
+    // 仿微泰/硅基官方 App：横轴是时间，点与点按真实间隔排
     final parsed = <DateTime>[];
     for (final r in _history) {
       parsed.add(DateTime.tryParse('${r['created_at'] ?? ''}') ??
@@ -284,12 +335,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final maxY = (spots.map((s) => s.y).reduce((a, b) => a > b ? a : b))
         .clamp(12.0, 25.0);
     final maxX = spots.last.x <= 0 ? 60.0 : spots.last.x;
+    // 范围内点/范围外点分色：官方 App 都是正常段绿、高低段变色
+    final inSpots = <FlSpot>[];
+    final outSpots = <FlSpot>[];
+    for (final s in spots) {
+      if (s.y < 3.9 || s.y > 10.0) {
+        outSpots.add(s);
+      } else {
+        inSpots.add(s);
+      }
+    }
+    // ignore: unused_local_variable
+    final lineColor =
+        _statusColor == Colors.grey ? Colors.green : _statusColor;
     return LineChart(
       LineChartData(
         minX: 0,
         maxX: maxX,
         minY: 0,
         maxY: maxY,
+        // 点一下曲线看具体数值+时间（仿官方 App 点查）
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipItems: (touched) => touched
+                .map((t) => LineTooltipItem(
+                      '${t.y.toStringAsFixed(1)} mmol/L\n${_axisTime(_chartT0.add(Duration(minutes: t.x.toInt())).toString())}',
+                      const TextStyle(fontSize: 12),
+                    ))
+                .toList(),
+          ),
+        ),
         gridData: FlGridData(
           drawVerticalLine: false,
           getDrawingHorizontalLine: (v) => FlLine(
@@ -353,22 +428,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
         lineBarsData: [
+          // 主线：范围内绿色段
           LineChartBarData(
-            spots: spots,
+            spots: inSpots.isEmpty ? spots : inSpots,
             isCurved: true,
             barWidth: 2.5,
-            color: _statusColor == Colors.grey
-                ? Colors.blue
-                : _statusColor,
+            color: Colors.green,
             dotData: FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: (_statusColor == Colors.grey
-                      ? Colors.blue
-                      : _statusColor)
-                  .withValues(alpha: 0.15),
+              color: Colors.green.withValues(alpha: 0.15),
             ),
           ),
+          // 叠加线：超范围点红色标出（仿官方 App 高低段变色）
+          if (outSpots.isNotEmpty)
+            LineChartBarData(
+              spots: outSpots,
+              isCurved: false,
+              barWidth: 0,
+              color: Colors.red,
+              dotData: FlDotData(
+                show: true,
+                getDotPainter: (spot, _, __, ___) =>
+                    FlDotCirclePainter(
+                  radius: 4,
+                  color: Colors.red,
+                  strokeWidth: 1,
+                  strokeColor: Colors.white,
+                ),
+              ),
+            ),
         ],
       ),
     );

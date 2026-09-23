@@ -57,12 +57,24 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       });
     }));
     _subs.add(_manager.readingStream.listen((reading) async {
+      // 库去重：前台和后台 isolate 会同时收到同一条广播先后入库，
+      // 先判库里 45 秒内有没有同值，有就只刷 UI 不重复插
+      //（截图里同一秒两条 5.5 就是双写，没去重）
+      final inserted =
+          await AppDatabase.instance.insertReadingDedup(reading);
       if (!mounted) return;
       setState(() {
-        _readings.insert(0, reading);
-        if (_readings.length > 100) _readings.removeLast();
+        // 同一秒的双回调：列表里已有同值同秒就不重复插
+        final dup = _readings.any((r) =>
+            (r.valueMmolL - reading.valueMmolL).abs() < 0.06 &&
+            r.timestamp.difference(reading.timestamp).inSeconds.abs() <
+                45);
+        if (!dup) {
+          _readings.insert(0, reading);
+          if (_readings.length > 100) _readings.removeLast();
+        }
       });
-      await AppDatabase.instance.insertReading(reading);
+      if (!inserted) return; // 重复广播：UI 已有，后续推送/报警跳过
       // 系统健康平台同步（OPPO Watch X 官方血糖表盘只能从这里读数）
       HealthBridge.writeGlucose(reading.valueMmolL, reading.timestamp);
       // 悬浮窗同步最新值（含时间）
@@ -123,7 +135,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     return Stream<String>.empty().listen((_) {});
   }
 
-  /// 后台 isolate 发来的 "value|trend|isoTime"：入库（去重）+ 列表置顶
+  /// 后台 isolate 发来的 "value|trend|isoTime"：去重入库 + 列表置顶
   Future<void> _applyBgReading(String msg) async {
     try {
       final parts = msg.split('|');
@@ -138,8 +150,9 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         trend: trend,
         brand: _manager.protocols.first.brand,
       );
-      await AppDatabase.instance.insertReading(r);
-      if (!mounted) return;
+      final inserted =
+          await AppDatabase.instance.insertReadingDedup(r);
+      if (!inserted || !mounted) return;
       setState(() {
         _readings.insert(0, r);
         if (_readings.length > 100) _readings.removeLast();
@@ -206,17 +219,19 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       ),
       body: Column(
         children: [
-          // 状态栏
+          // 状态栏：深色模式下强制深底白字（之前白底在深色模式看不见字）
           Container(
             padding: const EdgeInsets.all(12),
-            color: Colors.grey[200],
+            color: Colors.grey[850],
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('状态: $_statusText',
-                    style: const TextStyle(fontSize: 14)),
+                    style: const TextStyle(
+                        fontSize: 14, color: Colors.white)),
                 Text('已读: ${_readings.length} 条',
-                    style: const TextStyle(fontSize: 14)),
+                    style: const TextStyle(
+                        fontSize: 14, color: Colors.white)),
               ],
             ),
           ),
@@ -282,11 +297,36 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                                 content: Text(
-                                    '请在系统设置中允许"显示在其他应用上层"')),
+                                    '请在系统设置 → 应用 → 血糖管家中允许"显示在其他应用上层"，开了后退到桌面才会飘出黑底小窗')),
                           );
                           return;
                         }
-                        await GlucoseOverlay.show();
+                        try {
+                          await GlucoseOverlay.show();
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                                content: Text('悬浮窗打开失败：$e')),
+                          );
+                          return;
+                        }
+                        // 打开后核对系统侧是不是真出来了（ColorOS 常出现
+                        // 权限显示开了但窗没出来的情况），没出来就直说
+                        await Future.delayed(
+                            const Duration(milliseconds: 800));
+                        final active =
+                            await GlucoseOverlay.isActive();
+                        if (!mounted) return;
+                        if (!active) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                  '系统没把悬浮窗显示出来：请到设置 → 应用 → 血糖管家 → 悬浮窗/显示在其他应用上层，手动打开后再点一次'),
+                              duration: Duration(seconds: 6),
+                            ),
+                          );
+                        }
                         // 打开即推一条当前值，避免空窗
                         if (_readings.isNotEmpty && mounted) {
                           GlucoseOverlay.push(
@@ -349,18 +389,20 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                     },
                   ),
           ),
-          // 日志（底部）
+          // 日志（底部）：深色模式强制深底浅字（之前白底在深色模式看不见）
           Container(
             height: 80,
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.grey[100],
-              border: Border(top: BorderSide(color: Colors.grey[300]!)),
+              color: Colors.grey[900],
+              border: Border(top: BorderSide(color: Colors.grey[700]!)),
             ),
             child: ListView(
               children: _log
                   .sublist(_log.length > 10 ? _log.length - 10 : 0)
-                  .map((l) => Text(l, style: const TextStyle(fontSize: 11)))
+                  .map((l) => Text(l,
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.white70)))
                   .toList(),
             ),
           ),

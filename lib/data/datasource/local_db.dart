@@ -98,6 +98,35 @@ class AppDatabase {
     });
   }
 
+  /// 去重插入：同数值 45 秒内已有一条则跳过，返回 false。
+  /// 前台 manager 和后台 isolate 会同时收到同一条广播、先后调插入，
+  /// 不去重库里会成双（同一秒两条 5.5 就是这么来的）。
+  /// 窗口只取 45 秒：同一广播的双写一定在几秒内到达，而发射器
+  /// 下一分钟的新点至少 55 秒后才来——数值不变也要每分钟留一条，
+  /// 所以窗口不能放大到分钟级。
+  Future<bool> insertReadingDedup(GlucoseReading reading) async {
+    try {
+      final rows = await _db!.query(
+        'glucose_readings',
+        orderBy: 'created_at DESC',
+        limit: 1,
+      );
+      if (rows.isNotEmpty) {
+        final v =
+            (rows.first['value_mmol_l'] as num?)?.toDouble() ?? -999;
+        final ts =
+            DateTime.tryParse('${rows.first['created_at']}');
+        if ((v - reading.valueMmolL).abs() < 0.06 &&
+            ts != null &&
+            (reading.timestamp.difference(ts).inSeconds).abs() < 45) {
+          return false;
+        }
+      }
+    } catch (_) {}
+    await insertReading(reading);
+    return true;
+  }
+
   /// 插入手动读数（指血 / 其他 App 抄录）
   Future<int> insertManual(double mmolL, {String? notes}) async {
     return _db!.insert('glucose_readings', {

@@ -165,18 +165,34 @@ class GlucoseOverlay {
 
   static Future<void> show() async {
     if (_showing) return;
-    await FlutterOverlayWindow.showOverlay(
-      enableDrag: true,
-      overlayTitle: '血糖悬浮窗',
-      overlayContent: '实时血糖显示中',
-      flag: OverlayFlag.defaultFlag,
-      visibility: NotificationVisibility.visibilityPublic,
-      positionGravity: PositionGravity.right,
-      alignment: OverlayAlignment.centerRight,
-      width: 160,
-      height: 72,
-    );
-    _showing = true;
+    try {
+      await FlutterOverlayWindow.showOverlay(
+        enableDrag: true,
+        overlayTitle: '血糖悬浮窗',
+        overlayContent: '实时血糖显示中',
+        flag: OverlayFlag.defaultFlag,
+        visibility: NotificationVisibility.visibilityPublic,
+        positionGravity: PositionGravity.right,
+        alignment: OverlayAlignment.centerRight,
+        width: 160,
+        height: 72,
+      );
+      _showing = true;
+    } catch (_) {
+      _showing = false;
+      rethrow;
+    }
+  }
+
+  /// 系统侧真实状态（_showing 只是本 App 的标记，系统可能没显示——
+  /// 比如 ColorOS 悬浮窗权限没开时 show() 不报错但就是不出窗。
+  /// 以这个为准告诉用户真相）
+  static Future<bool> isActive() async {
+    try {
+      return await FlutterOverlayWindow.isActive();
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> hide() async {
