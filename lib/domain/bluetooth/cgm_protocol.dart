@@ -799,14 +799,16 @@ class BleCgmManager {
     if (!_lowPowerRunning) return;
     _attachListener();
     try {
+      // ⚠️ 之前这里写 AndroidScanMode.lowPower——OPPO Watch 上 lowPower
+      // 扫描窗口极短（每几秒才扫几毫秒），抓不住 AiDEX 1 分钟一次的
+      // 62 字节广播包，所以手表扫不到设备。
+      // 改用 balanced（默认）：15 秒窗口足够抓住广播，每分钟只扫 15 秒
+      // 仍比持续扫描省电 75%，对小电池手表友好。
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 15),
-        androidScanMode: AndroidScanMode.lowPower,
       );
     } catch (e) {
-      // 之前这里是 catch (_) {} ——手表上扫不动的原因全被吞了，
-      // 显示"监听中但没数"。现在写进日志，手表诊断页直接可见。
-      _log('省电扫失败：$e');
+      _log('扫失败：$e');
       _setState(BleCgmState.error);
     }
   }
