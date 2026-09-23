@@ -21,7 +21,7 @@ class AppDatabase {
     final dbPath = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dbPath, 'bloodsugar.db'),
-      version: 6,
+      version: 7,
       onCreate: _createTables,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
@@ -109,6 +109,23 @@ class AppDatabase {
                 'CREATE INDEX idx_treatments_time ON treatments(recorded_at DESC)');
           } catch (_) {}
         }
+        if (oldV < 7) {
+          // v7：序号唯一（防前后 isolate 并发双写产生同序号多行）。
+          // 先清同序号重复行（只留 id 最小的一条），再建唯一索引。
+          // SQLite 唯一索引允许多个 NULL：手动/导入的无序号行不受影响。
+          try {
+            await db.execute('''
+              DELETE FROM glucose_readings WHERE id NOT IN (
+                SELECT MIN(id) FROM glucose_readings
+                GROUP BY COALESCE(min_from_start, -id)
+              )
+            ''');
+          } catch (_) {}
+          try {
+            await db.execute(
+                'CREATE UNIQUE INDEX idx_glucose_minseq_unique ON glucose_readings(min_from_start)');
+          } catch (_) {}
+        }
       },
     );
   }
@@ -132,6 +149,10 @@ class AppDatabase {
     ''');
     await db.execute('''
       CREATE INDEX idx_glucose_minseq ON glucose_readings(min_from_start)
+    ''');
+    // v7 新装：序号唯一（防前后 isolate 并发双写产生同序号多行，见 onUpgrade oldV<7）
+    await db.execute('''
+      CREATE UNIQUE INDEX idx_glucose_minseq_unique ON glucose_readings(min_from_start)
     ''');
     await db.execute('''
       CREATE TABLE community_posts (
@@ -190,6 +211,9 @@ class AppDatabase {
   /// 插入读数（BLE / 广播 / 手动通用）——库里存 mg/dL（整数精度），
   /// mmol/L 只在显示时换算。血糖规范单位是 mg/dL，浮点存 mmol/L 四舍五入
   /// 会导致 5.5→99→5.49 来回抖；存整数 mg/dL 则读写稳定。
+  /// created_at 存发射器原始时间（reading.timestamp），不是入库时间——
+  /// 否则同分钟的广播+补洞全写成同一秒，列表出现“6.3×4条同秒”假重复，
+  /// 曲线和 AGP 的时间轴也全错。
   Future<int> insertReading(GlucoseReading reading) async {
     return _db!.insert('glucose_readings', {
       'value_mg_dl': reading.valueMgDl.round(),
@@ -198,8 +222,13 @@ class AppDatabase {
       'trend': reading.trend,
       'brand': reading.brand.displayName,
       'source': 'ble',
+      'created_at': _fmtTs(reading.timestamp),
     });
   }
+
+  String _fmtTs(DateTime t) =>
+      '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
 
   /// 去重插入：同一分钟序号（minFromStart）已有则跳过，返回 false。
   /// AiDEX 每分钟广播一个新序号（55 秒窗口是前台/后台 isolate 双写的
@@ -236,8 +265,13 @@ class AppDatabase {
         }
       }
     } catch (_) {}
-    await insertReading(reading);
-    return true;
+    try {
+      await insertReading(reading);
+      return true;
+    } catch (_) {
+      // 并发双写撞唯一索引（前后 isolate 同时入库）：对方已写入，本条算重复
+      return false;
+    }
   }
 
   /// 插入手动读数（指血 / 其他 App 抄录）
@@ -249,6 +283,39 @@ class AppDatabase {
       'source': 'manual',
       'notes': notes,
     });
+  }
+
+  /// CSV 导入单行（官方 App 导出的历史 / 以前的备份，一次性补进来）：
+  /// 按（时间+数值）判重，重复导入不翻倍。无序号（source='csv'），
+  /// 不进唯一索引冲突（SQLite 唯一索引允许多个 NULL）。
+  Future<bool> importReading({
+    required double mmolL,
+    required DateTime timestamp,
+    String brand = '导入',
+  }) async {
+    try {
+      if (mmolL <= 0 || mmolL > 45) return false;
+      final ts = _fmtTs(timestamp);
+      final mg = (mmolL * 18.0182).round();
+      final dup = await _db!.query(
+        'glucose_readings',
+        where: 'created_at = ? AND value_mg_dl = ?',
+        whereArgs: [ts, mg],
+        limit: 1,
+      );
+      if (dup.isNotEmpty) return false;
+      await _db!.insert('glucose_readings', {
+        'value_mg_dl': mg,
+        'value_mmol_l': mg / 18.0182,
+        'trend': 0,
+        'brand': brand,
+        'source': 'csv',
+        'created_at': ts,
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 最近 N 条
@@ -274,13 +341,10 @@ class AppDatabase {
   /// 范围内读数（起止时间戳，供 AGP 报告；时间正序）
   Future<List<Map<String, dynamic>>> readingsBetween(
       DateTime from, DateTime to) async {
-    String fmt(DateTime t) =>
-        '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
-        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
     return _db!.query(
       'glucose_readings',
       where: 'created_at >= ? AND created_at <= ?',
-      whereArgs: [fmt(from), fmt(to)],
+      whereArgs: [_fmtTs(from), _fmtTs(to)],
       orderBy: 'created_at ASC',
       limit: 30000,
     );

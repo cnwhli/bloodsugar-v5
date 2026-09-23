@@ -4,6 +4,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
+import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
 
 /// 后台收数前台服务入口（独立 isolate，App 退后台/锁屏也跑）
@@ -32,8 +33,10 @@ class CgmBackgroundHandler extends TaskHandler {
         // BgSync 发 mmol/L（主 isolate 按时间戳+数值去重，与序号无关）。
         // 后台 isolate 的 reading 带 minFromStart，入库走序号去重；
         // 主 isolate 收到后走 45 秒同值去重——两个窗口不打架。
-        FlutterForegroundTask.sendDataToMain(
-            '${r.valueMmolL}|${r.trend}|${r.timestamp.toIso8601String()}');
+        // v2：seq 一起透过来（BgSync.encode），主 isolate 重建 reading 时
+        // 带上 minFromStart，判重与前台同口径，不再出现"同秒多条"。
+        FlutterForegroundTask.sendDataToMain(BgSync.encode(
+            r.valueMmolL, r.trend, r.timestamp, r.minFromStart));
       } catch (_) {}
     });
     // 后台用省电模式：扫 15 秒、停 45 秒（发射器 1 分钟广播一次，不漏数）。

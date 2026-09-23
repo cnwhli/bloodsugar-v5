@@ -143,23 +143,19 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     return Stream<String>.empty().listen((_) {});
   }
 
-  /// 后台 isolate 发来的 "value|trend|isoTime"：去重入库 + 列表置顶。
-  /// 注意 BgSync 消息是 mmol/L 且不带序号：按时间戳+数值去重（45 秒窗口），
-  /// 与 _reloadFromDb 的合并逻辑同口径。新点更大概率靠 _reloadFromDb 补齐，
-  /// 这里只做即时置顶、不强求入库（后台 isolate 自己已写过库）。
+  /// 后台 isolate 发来的 v2 消息（BgSync.decode）：去重入库 + 列表置顶。
+  /// 有序号按序号判（与 readingStream 同口径），无序号才按 120 秒同值比——
+  /// 之前无序号，同一分钟的前后台双写全进列表，就是截图"6.3×4条同秒"。
   Future<void> _applyBgReading(String msg) async {
     try {
-      final parts = msg.split('|');
-      if (parts.length < 3) return;
-      final v = double.tryParse(parts[0]) ?? 0;
-      if (v <= 0) return;
-      final trend = int.tryParse(parts[1]) ?? 0;
-      final ts = DateTime.tryParse(parts[2]) ?? DateTime.now();
+      final d = BgSync.decode(msg);
+      if (d == null) return;
       final r = GlucoseReading(
-        valueMgDl: v * 18.0182,
-        timestamp: ts,
-        trend: trend,
+        valueMgDl: d.v * 18.0182,
+        timestamp: d.ts,
+        trend: d.trend,
         brand: _manager.protocols.first.brand,
+        minFromStart: d.seq,
       );
       final inserted =
           await AppDatabase.instance.insertReadingDedup(r);
@@ -168,16 +164,18 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       // 后台 isolate 自己已写库，这边判重失败多半是自己刚写过，
       // 列表置顶不能省——否则"收了数但列表不显示"。
       setState(() {
-        final dup = _readings.any((e) =>
-            (e.valueMmolL - r.valueMmolL).abs() < 0.06 &&
-            e.timestamp.difference(r.timestamp).inSeconds.abs() < 120);
+        final dup = r.minFromStart != null
+            ? _readings.any((e) => e.minFromStart == r.minFromStart)
+            : _readings.any((e) =>
+                (e.valueMmolL - r.valueMmolL).abs() < 0.06 &&
+                e.timestamp.difference(r.timestamp).inSeconds.abs() < 120);
         if (!dup) {
           _readings.insert(0, r);
           if (_readings.length > 100) _readings.removeLast();
         }
       });
       if (!inserted) return;
-      GlucoseOverlay.push(v, trend, _fmtTime(ts));
+      GlucoseOverlay.push(d.v, d.trend, _fmtTime(d.ts));
     } catch (_) {}
   }
 

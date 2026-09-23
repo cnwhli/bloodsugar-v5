@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/datasource/local_db.dart';
+import '../../services/csv_backup.dart';
 import 'ai_settings_screen.dart';
 import 'alert_settings_screen.dart';
 
@@ -85,6 +86,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onTap: () => ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('家属功能需 Supabase，二期上线')),
             ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.backup),
+            title: const Text('备份导出（CSV）'),
+            subtitle: const Text('无服务器：微信发给自己，换手机不丢数'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final n = await CsvBackup.exportAll();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('已导出 $n 条，发给自己保存好')),
+                );
+              }
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.restore),
+            title: const Text('恢复导入（CSV）'),
+            subtitle: const Text('官方 App 历史/以前的备份，一键补进来'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final n = await CsvBackup.importFile();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                      content: Text(
+                          n >= 0 ? '补入 $n 条历史（重复的自动跳过）' : '已取消')),
+                );
+              }
+              _load();
+            },
           ),
           ListTile(
             leading: const Icon(Icons.info_outline),

@@ -723,17 +723,25 @@ class BleCgmManager {
     _stopScanWatchdog();
     _scanWatchdog =
         Timer.periodic(const Duration(minutes: 25), (_) async {
-      if (_state != BleCgmState.scanning) return;
-      try {
-        await FlutterBluePlus.stopScan();
-        await FlutterBluePlus.startScan(
-          continuousUpdates: true,
-          removeIfGone: const Duration(minutes: 2),
-          androidScanMode: AndroidScanMode.lowLatency,
-        );
-        _log('扫描保活：已自动续期（防系统 30 分钟停扫）');
-      } catch (e) {
-        _log('扫描保活失败：$e');
+      if (_state == BleCgmState.scanning) {
+        try {
+          await FlutterBluePlus.stopScan();
+          await FlutterBluePlus.startScan(
+            continuousUpdates: true,
+            removeIfGone: const Duration(minutes: 2),
+            androidScanMode: AndroidScanMode.lowLatency,
+          );
+          _log('扫描保活：已自动续期（防系统 30 分钟停扫）');
+        } catch (e) {
+          _log('扫描保活失败：$e');
+        }
+        return;
+      }
+      // 掉出 scanning 但前台还要扫（报错/被系统停掉，如截图 40 分钟空洞）：
+      // 自动拉起，不等用户动手。后台 isolate 不走这条（它用低功耗轮询）。
+      if (foregroundScanActive) {
+        _log('监听掉线，自动拉起…');
+        await startScan(quiet: true);
       }
     });
   }
@@ -836,6 +844,9 @@ class BleCgmManager {
           if (protocol.isAdvertisementBased) {
             // 多点解析：广播包里带的 prev 历史点也一起收（App 刚开/中间漏扫时补洞）。
             // 同序号去重（_shouldEmit）只放行当前分钟的新点；历史点走批量补洞通道。
+            // 关键：当前点的时间戳按发射器分钟序号对齐到整分（minFromStart→整分），
+            // 不用 DateTime.now()——否则同分钟的重复广播每次入库时间都不同秒，
+            // 按 45 秒回退去重的老逻辑（无序号品牌）误杀，列表出现同秒 4 条。
             protocol.parseAdvertisementAll(r).then((readings) {
               if (readings.isEmpty) return;
               final fresh = readings.first;
