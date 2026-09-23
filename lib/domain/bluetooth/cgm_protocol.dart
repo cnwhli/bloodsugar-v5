@@ -730,14 +730,20 @@ class BleCgmManager {
 
   /// 开始扫描 CGM 设备（前台持续监听，点"断开"才停）
   /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
-  Future<String?> startScan() async {
+  /// quiet=true：后台切回前台自动续扫时用，不重复刷"开始监听"日志
+  /// 前台扫描标记：App 从后台切回前台时，若标记为 true 且系统停了扫，自动续扫
+  bool foregroundScanActive = false;
+  Future<String?> startScan({bool quiet = false}) async {
     final err = await _ensureReady();
     if (err != null) return err;
     await stopLowPowerWatch();
 
     _setState(BleCgmState.scanning);
-    _log('开始监听…（AiDEX/微泰二代广播自动收数，无需配对）');
-    _log('注意：微泰官方 App 会独占发射器——扫之前先杀掉它');
+    foregroundScanActive = true;
+    if (!quiet) {
+      _log('开始监听…（AiDEX/微泰二代广播自动收数，无需配对）');
+      _log('注意：微泰官方 App 会独占发射器——扫之前先杀掉它');
+    }
 
     // AiDEX 是被动广播：持续监听，不设 timeout，点"断开"才停。
     // 数值每分钟变一次（minFromStart 递增即新数据）。
@@ -781,6 +787,7 @@ class BleCgmManager {
 
   /// 断开/停止：停省电轮询 + 停扫描 + 断 GATT。切页面不调这个，只有点"断开"和退出才调。
   Future<void> disconnect() async {
+    foregroundScanActive = false;
     _stopScanWatchdog();
     await stopLowPowerWatch();
     await _detachListener();

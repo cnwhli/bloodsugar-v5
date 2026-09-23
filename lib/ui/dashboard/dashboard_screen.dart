@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:bloodsugar_v5/services/bg_sync.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
@@ -32,11 +33,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // 新数进来首页自动刷：数值+时间+曲线+周统计一起更新，不用手动下拉
     _readingSub =
         BleCgmManager().readingStream.listen((_) => _loadLatest());
+    // 后台收数通知：退后台期间的数进来，首页数值+曲线自动补上
+    _bgSub = BgSync.stream.listen((_) {
+      if (mounted) _loadLatest();
+    });
   }
+
+  StreamSubscription<String>? _bgSub;
 
   @override
   void dispose() {
     _readingSub?.cancel(); // 只取消订阅，manager 常驻
+    _bgSub?.cancel();
     super.dispose();
   }
 

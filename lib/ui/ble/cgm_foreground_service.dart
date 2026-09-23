@@ -21,13 +21,16 @@ class CgmBackgroundHandler extends TaskHandler {
     _m = BleCgmManager();
     await AppDatabase.init();
     await HealthBridge.ensureAuth();
-    // 后台只做两件事：收数 → 入库 + 同步写系统健康平台（供手表官方表盘读）。
-    // UI 由各页订阅 readingStream 自己刷。
+    // 后台只做三件事：收数 → 入库 + 同步写系统健康平台（供手表官方表盘读）
+    // + 通知主 isolate 刷新 UI（后台与主 isolate 的 readingStream 不互通，
+    // 不 sendDataToMain 主 isolate 永远不知道有新数——"退后台就断"的病根之二）。
     _sub = _m!.readingStream.listen((r) async {
       try {
         await AppDatabase.instance.insertReading(r);
         await HealthBridge.writeGlucose(r.valueMmolL, r.timestamp);
         await AlertService().check(r.valueMmolL);
+        FlutterForegroundTask.sendDataToMain(
+            '${r.valueMmolL}|${r.trend}|${r.timestamp.toIso8601String()}');
       } catch (_) {}
     });
     // 后台用省电模式：扫 15 秒、停 45 秒（发射器 1 分钟广播一次，不漏数）。

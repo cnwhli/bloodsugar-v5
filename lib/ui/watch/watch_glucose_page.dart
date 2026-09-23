@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
+import '../../services/bg_sync.dart';
 import '../watch/multi_watch_arch.dart';
 
 /// 手表端血糖页面（OPPO Watch X 优先，同时手机可预览）
@@ -66,6 +67,23 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
       if (!mounted) return;
       setState(() => _scanState = s.toString().split('.').last);
     }));
+    // 后台收数通知（手表息屏期间的数）：直接更新表盘，不用点开
+    _subs.add(BgSync.stream.listen((msg) {
+      if (!mounted) return;
+      try {
+        final parts = msg.split('|');
+        final v = double.tryParse(parts[0]) ?? 0;
+        if (v <= 0) return;
+        setState(() {
+          _mmolL = v;
+          _trend = int.tryParse(parts[1]) ?? 0;
+          _updatedAt =
+              DateTime.tryParse(parts[2]) ?? DateTime.now();
+          _hasData = true;
+        });
+        _buzzForLevel();
+      } catch (_) {}
+    }));
     setState(() => _scanState = _manager.state.toString().split('.').last);
   }
 
@@ -98,12 +116,20 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
   }
 
   Future<void> _toggleScan() async {
-    if (_manager.state == BleCgmState.scanning) {
-      await _manager.disconnect();
+    if (_lowPowerOn) {
+      await _manager.stopLowPowerWatch();
+      setState(() => _lowPowerOn = false);
       return;
     }
-    await _manager.startScan();
+    // 手表用省电监听：每分钟扫 15 秒（对齐发射器广播），其余休眠——
+    // 手表电池小，不能像手机前台那样持续 lowLatency 扫描。
+    // 参考各家 CGM 官方 App：都是按发射器 1 分钟 cadence 对齐唤醒，
+    // 空闲时射频休眠，效果不丢、功耗降一个数量级。
+    await _manager.startLowPowerWatch();
+    if (mounted) setState(() => _lowPowerOn = true);
   }
+
+  bool _lowPowerOn = false;
 
   Future<void> _buzzForLevel() async {
     if (_lowAlert || _highAlert) {
@@ -203,14 +229,14 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
         OutlinedButton.icon(
           onPressed: _toggleScan,
           icon: Icon(
-            _manager.state == BleCgmState.scanning
+            _lowPowerOn
                 ? Icons.bluetooth_disabled
                 : Icons.bluetooth_searching,
             size: 16,
           ),
           label: Text(
-            _manager.state == BleCgmState.scanning
-                ? '停止 ($_scanState)'
+            _lowPowerOn
+                ? '停止监听（省电模式·每分钟收一次）'
                 : '手表监听',
             style: const TextStyle(fontSize: 12),
           ),

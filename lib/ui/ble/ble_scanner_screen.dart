@@ -5,6 +5,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
+import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
 import 'cgm_foreground_service.dart';
 import 'glucose_overlay.dart';
@@ -41,6 +42,13 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       if (!mounted) return;
       setState(() => _statusText = state.toString().split('.').last);
     }));
+    // 后台收数通知：退后台期间的数进来，蓝牙页列表自动补上（不用退出重进）
+    _subs.add(BgSync.stream.listen((msg) {
+      if (!mounted) return;
+      _applyBgReading(msg);
+    }));
+    // App 从后台切回前台：若之前在扫、系统却停了扫，自动续扫并提示
+    _subs.add(_lifecycleSub());
     _subs.add(_manager.logStream.listen((msg) {
       if (!mounted) return;
       setState(() {
@@ -86,10 +94,58 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   void dispose() {
     // 只取消页面自己的订阅，不关 manager：监听在后台继续跑，
     // 切回来从 manager.history 恢复显示。App 退出才停（见 disconnect 按钮）。
+    WidgetsBinding.instance.removeObserver(_lifecycleObs);
     for (final s in _subs) {
       s.cancel();
     }
     super.dispose();
+  }
+
+  // ---- 后台收数通知：把后台期间收的数补进列表（不用退出重进）----
+  final _lifecycleObs = _ScanLifecycleObserver();
+  StreamSubscription<String> _lifecycleSub() {
+    _lifecycleObs.onResumed = () async {
+      if (!mounted) return;
+      // 切回前台：先把后台期间入库的数从库里补上
+      await _reloadFromDb();
+      if (!mounted) return;
+      // 若之前在扫但系统停了扫（国产 ROM 常见），自动续扫
+      if (_manager.foregroundScanActive &&
+          _manager.state != BleCgmState.scanning) {
+        _manager.startScan(quiet: true);
+        _log.add('已从后台返回，监听自动续上');
+        if (_log.length > 50) _log.removeAt(0);
+        setState(() {});
+      }
+    };
+    WidgetsBinding.instance.addObserver(_lifecycleObs);
+    // 返回一个永不结束的订阅占位（随 _subs 一起 cancel，无实际事件）
+    return Stream<String>.empty().listen((_) {});
+  }
+
+  /// 后台 isolate 发来的 "value|trend|isoTime"：入库（去重）+ 列表置顶
+  Future<void> _applyBgReading(String msg) async {
+    try {
+      final parts = msg.split('|');
+      if (parts.length < 3) return;
+      final v = double.tryParse(parts[0]) ?? 0;
+      if (v <= 0) return;
+      final trend = int.tryParse(parts[1]) ?? 0;
+      final ts = DateTime.tryParse(parts[2]) ?? DateTime.now();
+      final r = GlucoseReading(
+        valueMgDl: v * 18.0182,
+        timestamp: ts,
+        trend: trend,
+        brand: _manager.protocols.first.brand,
+      );
+      await AppDatabase.instance.insertReading(r);
+      if (!mounted) return;
+      setState(() {
+        _readings.insert(0, r);
+        if (_readings.length > 100) _readings.removeLast();
+      });
+      GlucoseOverlay.push(v, trend, _fmtTime(ts));
+    } catch (_) {}
   }
 
   /// 从数据库补历史（新读数入库后也会调用，保持内存与数据库一致）
@@ -311,5 +367,15 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         ],
       ),
     );
+  }
+}
+
+/// App 前后台切换监听：切回前台时把后台期间的数补上 + 断了自动续扫
+class _ScanLifecycleObserver with WidgetsBindingObserver {
+  VoidCallback? onResumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) onResumed?.call();
   }
 }

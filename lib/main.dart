@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:bloodsugar_v5/services/bg_sync.dart';
 import 'package:health/health.dart';
 import 'package:bloodsugar_v5/ui/dashboard/dashboard_screen.dart';
 import 'package:bloodsugar_v5/ui/ble/ble_scanner_screen.dart';
@@ -22,6 +23,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // 前台服务通信端口（后台 isolate 收数 → 主 isolate 入库/刷新 UI）
   FlutterForegroundTask.initCommunicationPort();
+  // 后台 isolate 收数 → 主 isolate 刷新 UI（dashboard/蓝牙页/手表页都订阅 BgSync）
+  FlutterForegroundTask.addTaskDataCallback(bgTaskCallback);
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

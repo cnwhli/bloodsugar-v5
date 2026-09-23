@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../../data/datasource/local_db.dart';
 
+import '../../services/bg_sync.dart';
+
 /// 悬浮窗血糖入口（独立 isolate，Android SYSTEM_ALERT_WINDOW）
 /// 注意：入口函数名必须是 overlayMain（插件原生侧写死查找该符号）
 @pragma('vm:entry-point')
