@@ -198,6 +198,21 @@ class AppDatabase {
     );
   }
 
+  /// 范围内读数（起止时间戳，供 AGP 报告；时间正序）
+  Future<List<Map<String, dynamic>>> readingsBetween(
+      DateTime from, DateTime to) async {
+    String fmt(DateTime t) =>
+        '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+    return _db!.query(
+      'glucose_readings',
+      where: 'created_at >= ? AND created_at <= ?',
+      whereArgs: [fmt(from), fmt(to)],
+      orderBy: 'created_at ASC',
+      limit: 30000,
+    );
+  }
+
   /// 周统计
   Future<Map<String, dynamic>> weeklyStats() async {
     final result = await _db!.rawQuery('''
