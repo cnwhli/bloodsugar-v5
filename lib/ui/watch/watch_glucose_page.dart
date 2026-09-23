@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/bg_sync.dart';
+import '../../services/health_bridge.dart';
 import '../watch/multi_watch_arch.dart';
 
 /// 手表端血糖页面（OPPO Watch X 优先，同时手机可预览）
@@ -31,7 +32,8 @@ class WatchGlucosePage extends StatefulWidget {
   State<WatchGlucosePage> createState() => _WatchGlucosePageState();
 }
 
-class _WatchGlucosePageState extends State<WatchGlucosePage> {
+class _WatchGlucosePageState extends State<WatchGlucosePage>
+    with WidgetsBindingObserver {
   final _manager = BleCgmManager();
   double _mmolL = 0;
   int _trend = 0;
@@ -40,6 +42,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
   bool _hasData = false;
   String _scanState = '';
   final List<StreamSubscription> _subs = [];
+  // 运动三件套（从 Health Connect / 手表传感器读，读不到就显示 --）
+  int? _bpm;
+  int? _steps;
+  int? _workoutMin;
+  Timer? _sportTimer;
 
   static const double _lowThreshold = 3.9;
   static const double _highThreshold = 10.0;
@@ -50,7 +57,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // 抬腕/回前台即刷新
     _loadLocal();
+    _loadSport(); // 心率/步数/运动
+    // 运动数据 5 分钟刷一次（抬腕看的是缓存值，不转菊花）
+    _sportTimer = Timer.periodic(
+        const Duration(minutes: 5), (_) => _loadSport());
     // 实时订阅：新数进来表盘自动刷
     _subs.add(_manager.readingStream.listen((r) {
       if (!mounted) return;
@@ -89,10 +101,33 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _sportTimer?.cancel();
     for (final s in _subs) {
       s.cancel();
     }
     super.dispose();
+  }
+
+  /// 抬腕/回前台：血糖从库补最新，运动三件套刷一次——
+  /// 手表表盘的"抬腕显示"本质就是 resumed 时立刻有数，不转菊花
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadLocal();
+      _loadSport();
+    }
+  }
+
+  /// 心率/步数/运动时长（三件套，失败就留空显示 --）
+  Future<void> _loadSport() async {
+    final r = await HealthBridge.readSportToday();
+    if (!mounted) return;
+    setState(() {
+      _bpm = r.bpm;
+      _steps = r.steps;
+      _workoutMin = r.workoutMin;
+    });
   }
 
   /// 先读本机库最新一条（手表独立用：自己扫自己存，不依赖手机）
@@ -224,6 +259,18 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
               : '点下方按钮开始监听',
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
+        const SizedBox(height: 6),
+        // 运动三件套：心率 / 步数 / 运动分钟（读不到显示 --，不断层）
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _sportItem('❤', _bpm == null ? '--' : '$_bpm',
+                'bpm', small),
+            _sportItem('👣', _fmtSteps(_steps), '步', small),
+            _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
+                '分钟', small),
+          ],
+        ),
         const SizedBox(height: 8),
         // 手表独立监听开关（OPPO Watch X 可脱离手机单收广播）
         OutlinedButton.icon(
@@ -260,5 +307,33 @@ class _WatchGlucosePageState extends State<WatchGlucosePage> {
       default:
         return '--';
     }
+  }
+
+  /// 运动小项：图标 + 值 + 单位（值读不到显示 --）
+  Widget _sportItem(
+      String icon, String value, String unit, double fontSize) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(icon, style: TextStyle(fontSize: fontSize + 2)),
+        Text(value,
+            style: TextStyle(
+                fontSize: fontSize + 4,
+                fontWeight: FontWeight.bold,
+                color: Colors.white)),
+        Text(unit,
+            style:
+                TextStyle(fontSize: fontSize - 1, color: Colors.grey)),
+      ],
+    );
+  }
+
+  /// 步数格式化：12345 → 1.2万
+  String _fmtSteps(int? steps) {
+    if (steps == null) return '--';
+    if (steps >= 10000) {
+      return '${(steps / 10000).toStringAsFixed(1)}万';
+    }
+    return '$steps';
   }
 }

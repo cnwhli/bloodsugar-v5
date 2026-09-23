@@ -22,6 +22,75 @@ class HealthBridge {
     }
   }
 
+  /// 运动/心率档授权（手表表盘的心率、步数、运动时长从这里读。
+  /// 和血糖分开要：只装手机的人不会被多弹框）
+  static bool _sportAuthed = false;
+  static Future<bool> ensureSportAuth() async {
+    if (_sportAuthed) return true;
+    try {
+      final types = [
+        HealthDataType.HEART_RATE,
+        HealthDataType.RESTING_HEART_RATE,
+        HealthDataType.STEPS,
+        HealthDataType.WORKOUT,
+      ];
+      final perms = [
+        HealthDataAccess.READ,
+        HealthDataAccess.READ,
+        HealthDataAccess.READ,
+        HealthDataAccess.READ,
+      ];
+      final ok =
+          await _health.requestAuthorization(types, permissions: perms);
+      _sportAuthed = ok;
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 今日心率（最新一条）+ 步数 + 运动分钟数。失败返回 null，不抛错。
+  static Future<({int? bpm, int? steps, int? workoutMin})>
+      readSportToday() async {
+    try {
+      if (!await ensureSportAuth()) return (bpm: null, steps: null, workoutMin: null);
+      final now = DateTime.now();
+      final dayStart =
+          DateTime(now.year, now.month, now.day);
+      final hr = await _health.getHealthDataFromTypes(
+        types: [HealthDataType.HEART_RATE],
+        startTime: dayStart,
+        endTime: now,
+      );
+      int? bpm;
+      if (hr.isNotEmpty) {
+        hr.sort((a, b) => b.dateTo.compareTo(a.dateTo));
+        bpm = int.tryParse(
+            '${hr.first.value}'.replaceAll(RegExp(r'[^0-9]'), ''));
+      }
+      int? steps;
+      try {
+        steps = await _health.getTotalStepsInInterval(dayStart, now);
+      } catch (_) {}
+      int? workoutMin;
+      try {
+        final wo = await _health.getHealthDataFromTypes(
+          types: [HealthDataType.WORKOUT],
+          startTime: dayStart,
+          endTime: now,
+        );
+        var secs = 0;
+        for (final p in wo) {
+          secs += p.dateTo.difference(p.dateFrom).inSeconds;
+        }
+        if (wo.isNotEmpty) workoutMin = secs ~/ 60;
+      } catch (_) {}
+      return (bpm: bpm, steps: steps, workoutMin: workoutMin);
+    } catch (_) {
+      return (bpm: null, steps: null, workoutMin: null);
+    }
+  }
+
   /// 写入一条血糖（失败静默：没装 Health Connect 的机器直接跳过）
   static Future<void> writeGlucose(double mmolL, DateTime time) async {
     try {
