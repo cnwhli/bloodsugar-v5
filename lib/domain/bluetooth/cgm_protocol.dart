@@ -795,7 +795,12 @@ class BleCgmManager {
         timeout: const Duration(seconds: 15),
         androidScanMode: AndroidScanMode.lowPower,
       );
-    } catch (_) {}
+    } catch (e) {
+      // 之前这里是 catch (_) {} ——手表上扫不动的原因全被吞了，
+      // 显示"监听中但没数"。现在写进日志，手表诊断页直接可见。
+      _log('省电扫失败：$e');
+      _setState(BleCgmState.error);
+    }
   }
 
   Future<void> stopLowPowerWatch() async {

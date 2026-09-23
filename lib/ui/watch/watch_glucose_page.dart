@@ -63,6 +63,8 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   int _page = 0;
   List<_Pt> _hist = []; // 时间正序
   int _rangeH = 6; // 曲线范围：3 / 6 / 12 / 24，点曲线切换
+  // 扫描日志缓存（诊断页用：附近设备/权限/失败原因都在这）
+  final List<String> _diagLogs = [];
 
   static const double _lowThreshold = 3.9;
   static const double _highThreshold = 10.0;
@@ -98,6 +100,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     _subs.add(_manager.stateStream.listen((s) {
       if (!mounted) return;
       setState(() => _scanState = s.toString().split('.').last);
+    }));
+    // 扫描日志缓存（诊断页最近 20 条：附近设备/权限/失败原因）
+    _subs.add(_manager.logStream.listen((msg) {
+      _diagLogs.add(msg);
+      if (_diagLogs.length > 50) _diagLogs.removeAt(0);
     }));
     // 后台收数通知（手表息屏期间的数）：直接更新表盘，不用点开
     _subs.add(BgSync.stream.listen((msg) {
@@ -157,6 +164,9 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   }
 
   /// 先读本机库最新一条 + 最近 24h 历史（手表独立用：自己扫自己存，不依赖手机）
+  /// 本机库空时再读系统平台兜底（官方表盘/官方 App 写入的数），
+  /// 兜底命中就显示它（时间戳按平台时间），并注明来源——
+  /// 之前库空就直接 "--"，平台有数也看不见
   Future<void> _loadLocal() async {
     try {
       await AppDatabase.init();
@@ -183,6 +193,19 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           _hasData = _mmolL > 0;
         }
       });
+      // 本机库空：读平台兜底（官方表盘/官方 App 写入的数），有就显示
+      if (!_hasData || _hist.isEmpty) {
+        final g = await HealthBridge.readLatestGlucose();
+        if (g != null && mounted) {
+          setState(() {
+            _mmolL = g.mmolL;
+            _updatedAt = g.time;
+            _hasData = true;
+            _brand = '系统平台';
+            _hist.add(_Pt(g.mmolL, g.time));
+          });
+        }
+      }
     } catch (_) {}
   }
 
@@ -204,8 +227,15 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     // 手表电池小，不能像手机前台那样持续 lowLatency 扫描。
     // 参考各家 CGM 官方 App：都是按发射器 1 分钟 cadence 对齐唤醒，
     // 空闲时射频休眠，效果不丢、功耗降一个数量级。
-    await _manager.startLowPowerWatch();
-    if (mounted) setState(() => _lowPowerOn = true);
+    final err = await _manager.startLowPowerWatch();
+    if (!mounted) return;
+    setState(() => _lowPowerOn = err == null);
+    // 失败直接显示原因（最常见：手表上没给"附近的设备"权限）——
+    // 之前吞掉返回值，显示"监听中但没数"，误导人
+    if (err != null) {
+      setState(() => _scanState = err);
+      HapticFeedback.heavyImpact();
+    }
   }
 
   bool _lowPowerOn = false;
@@ -576,10 +606,94 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         ),
         const SizedBox(height: 6),
         Text(
-          _lowPowerOn ? '监听中 · $_scanState' : '未监听 · 点长按开始',
+          // 显示扫描状态原文（权限缺失/蓝牙没开/扫失败直接可见，
+          // 不再是干巴巴的"未监听"）
+          _lowPowerOn ? '监听中 · $_scanState' : '$_scanState',
+          textAlign: TextAlign.center,
           style: TextStyle(fontSize: small - 1, color: Colors.grey),
         ),
+        const SizedBox(height: 4),
+        // 诊断按钮：点一下看扫描日志（附近设备/权限/失败原因都在这）
+        GestureDetector(
+          onTap: () => _showDiagSheet(),
+          child: Text(
+            '诊断日志 · 点我查看',
+            style: TextStyle(
+                fontSize: small - 1,
+                color: Colors.blue,
+                decoration: TextDecoration.underline),
+          ),
+        ),
       ],
+    );
+  }
+
+  /// 手表诊断页：一页纸说清"为什么没数"
+  /// - 蓝牙开关 / 本机库条数 / 平台兜底 / 最近 20 条扫描日志
+  /// - 出问题先看这页，截屏发我就能定位
+  Future<void> _showDiagSheet() async {
+    var dbCount = -1;
+    String? platInfo;
+    try {
+      await AppDatabase.init();
+      final rows = await AppDatabase.instance.recentReadings(limit: 1000);
+      dbCount = rows.length;
+    } catch (_) {}
+    try {
+      final g = await HealthBridge.readLatestGlucose();
+      platInfo = g == null
+          ? '平台无血糖数据'
+          : '平台有数 ${g.mmolL.toStringAsFixed(1)} · ${_fmtTime(g.time)}';
+    } catch (_) {
+      platInfo = '平台读取失败';
+    }
+    final logs = _diagLogs.length > 20
+        ? _diagLogs.sublist(_diagLogs.length - 20)
+        : List.of(_diagLogs);
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('诊断',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
+              const SizedBox(height: 6),
+              Text('状态：$_scanState',
+                  style: const TextStyle(
+                      fontSize: 12, color: Colors.white70)),
+              Text(
+                  dbCount < 0 ? '本机库：读取失败' : '本机库：$dbCount 条',
+                  style: const TextStyle(
+                      fontSize: 12, color: Colors.white70)),
+              Text('平台兜底：${platInfo ?? '未知'}',
+                  style: const TextStyle(
+                      fontSize: 12, color: Colors.white70)),
+              const SizedBox(height: 6),
+              const Text('最近日志：',
+                  style: TextStyle(
+                      fontSize: 12, color: Colors.white70)),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Text(
+                    logs.isEmpty ? '(暂无日志)' : logs.join('\n'),
+                    style: const TextStyle(
+                        fontSize: 11, color: Colors.grey),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

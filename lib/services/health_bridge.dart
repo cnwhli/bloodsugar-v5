@@ -318,4 +318,28 @@ class HealthBridge {
       );
     } catch (_) {}
   }
+
+  /// 读回系统平台最新一条血糖（手表兜底用：本机库空时看平台有没有数，
+  /// 比如官方表盘/别的 App 写进去的。返回 (mmol/L, 时间)，无则 null。
+  /// 平台单位可能是 mg/dL（>30 即按 mg/dL 换算），这里统一回 mmol/L。）
+  static Future<({double mmolL, DateTime time})?> readLatestGlucose() async {
+    try {
+      if (!await ensureAuth()) return null;
+      final now = DateTime.now();
+      final pts = await _health.getHealthDataFromTypes(
+        types: [HealthDataType.BLOOD_GLUCOSE],
+        startTime: now.subtract(const Duration(hours: 24)),
+        endTime: now,
+      );
+      if (pts.isEmpty) return null;
+      pts.sort((a, b) => b.dateTo.compareTo(a.dateTo));
+      final raw =
+          (pts.first.value as NumericHealthValue).numericValue.toDouble();
+      final mmolL = raw > 30 ? raw / 18.0182 : raw;
+      if (mmolL <= 0 || mmolL > 45) return null;
+      return (mmolL: mmolL, time: pts.first.dateTo);
+    } catch (_) {
+      return null;
+    }
+  }
 }
