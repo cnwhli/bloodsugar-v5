@@ -288,6 +288,126 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     HapticFeedback.selectionClick();
   }
 
+  // ---- 第 4 页：长期记录（7/14/30 天 AGP-lite，走本机库）----
+  int _longDays = 7; // 点一下切换 7 → 14 → 30
+  ({int n, double tir, double avg, double mn, double mx, int low, int high})?
+      _longStats;
+  bool _longLoading = false;
+
+  void _cycleLongRange() {
+    setState(() {
+      _longDays = _longDays == 7 ? 14 : _longDays == 14 ? 30 : 7;
+      _longStats = null;
+    });
+    HapticFeedback.selectionClick();
+    _loadLongTerm();
+  }
+
+  /// 查本机库算长期统计（TIR/平均/最高最低/偏低偏高点数）。
+  /// 历史都在本机库：手表自己收的 + CSV 补的 + 平台兜底，全在这。
+  Future<void> _loadLongTerm() async {
+    if (_longLoading) return;
+    _longLoading = true;
+    try {
+      await AppDatabase.init();
+      final now = DateTime.now();
+      final rows = await AppDatabase.instance.readingsBetween(
+        now.subtract(Duration(days: _longDays)),
+        now,
+      );
+      if (!mounted) return;
+      if (rows.isEmpty) {
+        setState(() => _longStats = null);
+        return;
+      }
+      var inR = 0, low = 0, high = 0, sum = 0.0;
+      var mn = double.infinity, mx = double.negativeInfinity;
+      for (final m in rows) {
+        final v = (m['value_mmol_l'] as num?)?.toDouble() ?? 0;
+        if (v <= 0) continue;
+        sum += v;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+        if (v >= 3.9 && v <= 10.0) {
+          inR++;
+        } else if (v < 3.9) {
+          low++;
+        } else {
+          high++;
+        }
+      }
+      final n = rows.length;
+      setState(() => _longStats = (
+        n: n,
+        tir: n == 0 ? 0 : inR / n * 100,
+        avg: n == 0 ? 0 : sum / n,
+        mn: mn.isInfinite ? 0 : mn,
+        mx: mx.isInfinite ? 0 : mx,
+        low: low,
+        high: high,
+      ));
+    } catch (_) {
+      if (mounted) setState(() => _longStats = null);
+    } finally {
+      _longLoading = false;
+    }
+  }
+
+  /// 第 4 页 UI：大数字 TIR + 范围行 + 点切范围（7/14/30）
+  Widget _buildLongTermPage() {
+    final small = widget.shape.isCircular ? 10.0 : 12.0;
+    final s = _longStats;
+    // 进页即查（只查一次，切换范围时重查）
+    if (s == null && !_longLoading) {
+      Future.microtask(_loadLongTerm);
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('长期 · 近 $_longDays 天',
+            style: TextStyle(fontSize: small, color: Colors.grey)),
+        const SizedBox(height: 6),
+        if (s == null)
+          Text(_longLoading ? '…' : '--',
+              style: TextStyle(
+                  fontSize: widget.shape.isCircular ? 36 : 48,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey))
+        else
+          Text('${s.tir.toStringAsFixed(0)}%',
+              style: TextStyle(
+                  fontSize: widget.shape.isCircular ? 36 : 48,
+                  fontWeight: FontWeight.bold,
+                  color: s.tir >= 70 ? Colors.green : Colors.orange)),
+        Text('TIR $_longDays 天',
+            style: TextStyle(fontSize: small, color: Colors.grey)),
+        const SizedBox(height: 6),
+        if (s != null) ...[
+          Text(
+            '平均 ${s.avg.toStringAsFixed(1)} · 最高 ${s.mx.toStringAsFixed(1)} · 最低 ${s.mn.toStringAsFixed(1)}',
+            textAlign: TextAlign.center,
+            style:
+                TextStyle(fontSize: small - 1, color: Colors.white70),
+          ),
+          Text(
+            '${s.n} 点 · 偏低 ${s.low} · 偏高 ${s.high}',
+            style: TextStyle(
+                fontSize: small - 1,
+                color: s.low + s.high == 0
+                    ? Colors.green
+                    : Colors.orange),
+          ),
+        ] else
+          Text(_longLoading ? '查库中…' : '暂无数据\n点"记一笔"/CSV 补历史',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: small - 1, color: Colors.grey)),
+        const SizedBox(height: 4),
+        Text('点一下切范围（7/14/30 天）',
+            style: TextStyle(fontSize: small - 1, color: Colors.grey)),
+      ],
+    );
+  }
+
   /// 数据新鲜度：超过 10 分钟没数就提示
   String? get _staleTip {
     if (!_hasData) return null;
@@ -343,6 +463,15 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
                     },
                     child: _buildStatsPage(statusColor),
                   ),
+                  // 第 4 页：长期记录（7/14/30 天，点一下切范围，长按监听开关）
+                  GestureDetector(
+                    onTap: _cycleLongRange,
+                    onLongPress: () async {
+                      HapticFeedback.heavyImpact();
+                      await _toggleScan();
+                    },
+                    child: _buildLongTermPage(),
+                  ),
                 ],
               ),
             ),
@@ -351,7 +480,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(
-                3,
+                4,
                 (i) => Container(
                   width: 6,
                   height: 6,
@@ -568,6 +697,8 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   }
 
   /// 第 3 页：今日统计（TIR/计数/低血糖次数 + 快捷按钮）
+  /// 点"长期"进第 4 页：7/14/30 天 AGP（TIR/平均/最高最低/偏低偏高点数，
+  /// 走 readingsBetween 查库——历史都在本机库，不依赖手机不走服务器）
   Widget _buildStatsPage(Color statusColor) {
     final small = widget.shape.isCircular ? 10.0 : 12.0;
     final now = DateTime.now();
@@ -605,6 +736,26 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           ],
         ),
         const SizedBox(height: 6),
+        // 长期记录入口：大按钮，右滑/点一下进 7/14/30 天
+        GestureDetector(
+          onTap: () => _pager.animateToPage(3,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut),
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.blue.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Text('长期记录 →',
+                style: TextStyle(
+                    fontSize: small + 2,
+                    color: Colors.blue,
+                    fontWeight: FontWeight.bold)),
+          ),
+        ),
+        const SizedBox(height: 4),
         Text(
           // 显示扫描状态原文（权限缺失/蓝牙没开/扫失败直接可见，
           // 不再是干巴巴的"未监听"）
