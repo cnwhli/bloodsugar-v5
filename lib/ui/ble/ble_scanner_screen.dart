@@ -245,7 +245,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                     icon: const Icon(Icons.picture_in_picture_alt),
                     label: Text(GlucoseOverlay.isShowing
                         ? '关闭悬浮窗'
-                        : '开启悬浮窗'),
+                        : '开启悬浮窗（退到桌面也显示）'),
                   ),
                 ),
               ],

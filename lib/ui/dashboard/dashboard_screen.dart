@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
+import '../ble/glucose_overlay.dart';
 
 /// 首页仪表盘
 /// 血糖圆环 + 24小时曲线 + 周统计 + 快捷操作
@@ -60,6 +61,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             (latest.first['trend'] as num?)?.toInt() ?? 0);
         _statusColor = _statusColorFor(_currentGlucose);
         _latestTime = _fmtDbTime('${latest.first['created_at'] ?? ''}');
+        // 首页也同步推悬浮窗（蓝牙页开了悬浮窗后退回首页仍更新）
+        GlucoseOverlay.push(_currentGlucose,
+            (latest.first['trend'] as num?)?.toInt() ?? 0, _latestTime);
       }
     });
     final stats = await AppDatabase.instance.weeklyStats();
