@@ -15,22 +15,29 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../domain/nutrition/food_gi.dart';
 
 /// Agent 提供方
+///
+/// 默认第一位是免费在线 AI（pollinations，开箱即用、无需配置）；
+/// hermes/openclaw 保留原顺序（索引 1/2），老用户已存配置不漂移。
 enum AiProvider {
-  hermes('Hermes Agent（hermes proxy）', '/v1/chat/completions'),
-  openclaw('OpenClaw（OpenAI 兼容端点）', '/v1/chat/completions'),
-  openaiCompat('自定义 OpenAI 兼容网关', '/v1/chat/completions');
+  pollinations('免费在线 AI（开箱即用，无需配置）', 'https://text.pollinations.ai', '/openai'),
+  hermes('Hermes Agent（hermes proxy）', '', '/v1/chat/completions'),
+  openclaw('OpenClaw（OpenAI 兼容端点）', '', '/v1/chat/completions'),
+  openaiCompat('自定义 OpenAI 兼容网关', '', '/v1/chat/completions');
 
   final String label;
+  final String defaultBaseUrl;
   final String chatPath;
-  const AiProvider(this.label, this.chatPath);
+  const AiProvider(this.label, this.defaultBaseUrl, this.chatPath);
 }
 
 /// 连接配置（本地持久化）
 class AiAgentConfig {
   static const _kEnabled = 'ai_enabled';
   static const _kProvider = 'ai_provider';
+  static const _kProviderV2 = 'ai_provider_v2'; // enum加了免费项后的迁移标记
   static const _kBaseUrl = 'ai_base_url';
   static const _kModel = 'ai_model';
   static const _kApiKey = 'ai_api_key'; // secure storage
@@ -59,17 +66,57 @@ class AiAgentConfig {
     return '$base${provider.chatPath}';
   }
 
+  static AiAgentConfig _defaults() => AiAgentConfig(
+        enabled: true, // 默认开箱即用：免费在线AI
+        provider: AiProvider.pollinations,
+        baseUrl: AiProvider.pollinations.defaultBaseUrl,
+        model: 'openai', // pollinations免费档模型名，失败时自动降级lite
+      );
+
   static Future<AiAgentConfig> load() async {
     final prefs = await SharedPreferences.getInstance();
+    final migrated = prefs.getBool(_kProviderV2) ?? false;
+    if (!migrated) {
+      // 一次性迁移：老用户存的是旧索引（0=hermes,1=openclaw,2=自定义），整体+1
+      final oldIdx = prefs.getInt(_kProvider);
+      if (oldIdx != null) {
+        await prefs.setInt(
+            _kProvider, (oldIdx + 1).clamp(0, AiProvider.values.length - 1));
+      }
+      await prefs.setBool(_kProviderV2, true);
+      // 老用户没配过网关（baseUrl空）：同样给免费默认，开箱即用
+      final hadUrl = (prefs.getString(_kBaseUrl) ?? '').isNotEmpty;
+      if (!hadUrl) {
+        final d = _defaults();
+        final cfg = AiAgentConfig(
+          enabled: prefs.getBool(_kEnabled) ?? true,
+          baseUrl: d.baseUrl,
+          model: prefs.getString(_kModel) ?? d.model,
+        );
+        final pIdx = prefs.getInt(_kProvider) ?? 0;
+        cfg.provider =
+            AiProvider.values[pIdx.clamp(0, AiProvider.values.length - 1)];
+        if (cfg.provider != AiProvider.pollinations && cfg.baseUrl.isNotEmpty) {
+          // 老用户手动配过provider但没URL：退回免费默认
+          cfg.provider = AiProvider.pollinations;
+        }
+        cfg.apiKey = await _secure.read(key: _kApiKey) ?? '';
+        return cfg;
+      }
+    }
+    final hasEnabled = prefs.containsKey(_kEnabled);
+    final d = _defaults();
     final cfg = AiAgentConfig(
-      enabled: prefs.getBool(_kEnabled) ?? false,
-      baseUrl: prefs.getString(_kBaseUrl) ?? '',
-      model: prefs.getString(_kModel) ?? 'default',
+      enabled: hasEnabled ? (prefs.getBool(_kEnabled) ?? true) : d.enabled,
+      baseUrl: prefs.getString(_kBaseUrl) ?? d.baseUrl,
+      model: prefs.getString(_kModel) ?? d.model,
     );
     final pIdx = prefs.getInt(_kProvider) ?? 0;
     cfg.provider = AiProvider.values[pIdx.clamp(0, AiProvider.values.length - 1)];
     cfg.apiKey = await _secure.read(key: _kApiKey) ?? '';
-    if (cfg.baseUrl.isEmpty) cfg.enabled = false;
+    if (cfg.provider != AiProvider.pollinations && cfg.baseUrl.isEmpty) {
+      cfg.enabled = false;
+    }
     return cfg;
   }
 
@@ -97,17 +144,34 @@ class AiAgentService {
 规则：只做健康科普和用药提醒，不做诊断、不开处方；涉及调药、胰岛素剂量必须提示咨询医生；
 血糖 <3.9 提示按 15-15 原则处理并就医；回答简短，重点先行。''';
 
-  /// 问答：云端优先，失败/未配置自动降级本地规则
+  /// 问答：配置的AI优先 → 免费在线AI兜底 → 本地规则
   Future<String> ask(String question, {double? currentGlucoseMmolL}) async {
     final cfg = await AiAgentConfig.load();
-    if (cfg.enabled && cfg.baseUrl.isNotEmpty) {
+    if (cfg.enabled &&
+        (cfg.provider == AiProvider.pollinations ||
+            cfg.baseUrl.isNotEmpty)) {
       try {
         return await _askCloud(cfg, question, currentGlucoseMmolL);
       } catch (e) {
-        return '${_askLocal(question, currentGlucoseMmolL)}\n\n（云端助手连接失败：$e，已用本地模式回答）';
+        // 免费AI失败：pollinations重 everyday 换模型名重试一次
+        if (cfg.provider == AiProvider.pollinations &&
+            cfg.model != 'mistral') {
+          try {
+            final retry = AiAgentConfig(
+              enabled: true,
+              provider: cfg.provider,
+              baseUrl: cfg.baseUrl,
+              model: 'mistral',
+              apiKey: cfg.apiKey,
+            );
+            return await _askCloud(retry, question, currentGlucoseMmolL);
+          } catch (_) {}
+        }
+        return '${_askLocal(question, currentGlucoseMmolL, foodAnswer: tryFoodAnswer(question, currentGlucoseMmolL))}\n\n（在线AI连接失败：$e，已用本地模式回答）';
       }
     }
-    return _askLocal(question, currentGlucoseMmolL);
+    return _askLocal(question, currentGlucoseMmolL,
+        foodAnswer: tryFoodAnswer(question, currentGlucoseMmolL));
   }
 
   Future<String> _askCloud(
@@ -115,6 +179,11 @@ class AiAgentService {
     var context = '';
     if (glucose != null && glucose > 0) {
       context = '（用户当前血糖 ${glucose.toStringAsFixed(1)} mmol/L）';
+    }
+    // 饮食打卡先本地算好，拼进发给云端的上下文：云端回答直接带数，不用二次问
+    final food = tryFoodAnswer(question, glucose);
+    if (food != null) {
+      context = '$context\n本地食物库测算：$food';
     }
     final body = jsonEncode({
       'model': cfg.model.isEmpty ? 'default' : cfg.model,
@@ -141,8 +210,26 @@ class AiAgentService {
     return text;
   }
 
+  /// 饮食打卡：本地GI库先算，云端/本地回答都带上——离线也有数
+  String? tryFoodAnswer(String question, double? glucose) {
+    final foods = lookupFoods(question);
+    if (foods.isEmpty) return null;
+    final buf = StringBuffer();
+    for (final f in foods) {
+      final rise = predictRiseMmolL(carbsG: f.carbsPerServingG, gi: f.gi);
+      buf.writeln(
+          '${f.name}：${f.giLevel}（GI${f.gi}），${f.serving}约含碳水${f.carbsPerServingG.toStringAsFixed(0)}g，'
+          '预计升糖约 ${rise.toStringAsFixed(1)} mmol/L。');
+    }
+    buf.writeln('建议：先吃菜和蛋白，主食减半；餐后30分钟散步15–20分钟；2小时后复测验证。');
+    if (glucose != null && glucose > 0) {
+      buf.writeln('你当前血糖 ${glucose.toStringAsFixed(1)} mmol/L。');
+    }
+    return buf.toString().trim();
+  }
+
   /// 本地规则引擎（离线可用）
-  String _askLocal(String question, double? glucose) {
+  String _askLocal(String question, double? glucose, {String? foodAnswer}) {
     final q = question.toLowerCase();
     final g = glucose != null && glucose > 0
         ? '\n你当前血糖 ${glucose.toStringAsFixed(1)} mmol/L。'
@@ -164,7 +251,8 @@ class AiAgentService {
       }
       return s;
     }
-    if (has(['吃', '饮食', '食物', 'gi', '碳水', '米饭', '水果'])) {
+    if (has(['吃', '饮食', '食物', 'gi', '碳水', '米饭', '水果', '粉', '面', '餐'])) {
+      if (foodAnswer != null) return '$foodAnswer$g';
       return '饮食要点：定时定量、优选低GI（杂粮/蔬菜/蛋白先吃）、水果两餐之间少量、饮酒前先测血糖。$g';
     }
     if (has(['运动', '跑步', '锻炼', '走路'])) {
@@ -176,7 +264,7 @@ class AiAgentService {
     if (has(['夜', '睡', '黎明', '苏木杰'])) {
       return '夜间血糖：睡前测一次，设低血糖闹钟；晨起偏高可能是黎明现象或夜间低血糖反跳，建议做几天 0/3/6 点血糖谱给医生看。$g';
     }
-    return '收到：$question$g\n\n本地模式只能做基础科普。连上 Hermes/OpenClaw 后我可以结合你的血糖曲线做个性化分析，去"我的 → AI 设置"配置。';
+    return '收到：$question$g\n\n${foodAnswer != null ? '$foodAnswer\n\n' : ''}本地模式只能做基础科普。当前默认连免费在线AI（联网即用，不出国、无需配置）；也可去"我的 → AI 设置"换 Hermes/OpenClaw（数据不出内网）。';
   }
 
   /// 连通性测试

@@ -161,7 +161,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
             ],
             const SizedBox(height: 16),
             const Text(
-              '说明：地址和 Key 只存本机，卸载即删。\n不配置也能用，自动走本地模式（离线可用）。',
+              '说明：默认走免费在线 AI，开箱即用（需联网，不出国、无需配置）。\n'
+              '也可切换 Hermes/OpenClaw，地址和 Key 只存本机，卸载即删；内网使用数据不出家门。\n'
+              '食物打卡（"吃了一碗螺蛳粉"）本地先算 GI 和升糖预测，联网后 AI 再给个性化建议。',
               style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
           ],
