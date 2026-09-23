@@ -26,9 +26,12 @@ class CgmBackgroundHandler extends TaskHandler {
     // 不 sendDataToMain 主 isolate 永远不知道有新数——"退后台就断"的病根之二）。
     _sub = _m!.readingStream.listen((r) async {
       try {
-        await AppDatabase.instance.insertReading(r);
+        await AppDatabase.instance.insertReadingDedup(r);
         await HealthBridge.writeGlucose(r.valueMmolL, r.timestamp);
         await AlertService().check(r.valueMmolL);
+        // BgSync 发 mmol/L（主 isolate 按时间戳+数值去重，与序号无关）。
+        // 后台 isolate 的 reading 带 minFromStart，入库走序号去重；
+        // 主 isolate 收到后走 45 秒同值去重——两个窗口不打架。
         FlutterForegroundTask.sendDataToMain(
             '${r.valueMmolL}|${r.trend}|${r.timestamp.toIso8601String()}');
       } catch (_) {}

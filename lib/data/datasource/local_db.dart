@@ -21,7 +21,7 @@ class AppDatabase {
     final dbPath = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dbPath, 'bloodsugar.db'),
-      version: 3,
+      version: 4,
       onCreate: _createTables,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
@@ -47,6 +47,28 @@ class AppDatabase {
             )
           ''');
         }
+        if (oldV < 4) {
+          // v4：主存单位改为 mg/dL 整数（规范单位，读写稳定），
+          // 同时加 min_from_start 列供按发射器分钟序号去重。
+          // SQLite 不支持 ADD GENERATED 列，普通列即可。
+          try {
+            await db.execute(
+                'ALTER TABLE glucose_readings ADD COLUMN value_mg_dl INTEGER');
+          } catch (_) {}
+          try {
+            await db.execute(
+                'ALTER TABLE glucose_readings ADD COLUMN min_from_start INTEGER');
+          } catch (_) {}
+          // 老数据回填 mg/dL（只填一次；已有值跳过）
+          try {
+            await db.execute(
+                'UPDATE glucose_readings SET value_mg_dl = ROUND(value_mmol_l * 18.0182) WHERE value_mg_dl IS NULL');
+          } catch (_) {}
+          try {
+            await db.execute(
+                'CREATE INDEX idx_glucose_minseq ON glucose_readings(min_from_start)');
+          } catch (_) {}
+        }
       },
     );
   }
@@ -56,7 +78,8 @@ class AppDatabase {
       CREATE TABLE glucose_readings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         value_mmol_l REAL NOT NULL,
-        value_mg_dl REAL GENERATED ALWAYS AS (ROUND(value_mmol_l * 18.0182, 1)) STORED,
+        value_mg_dl INTEGER,
+        min_from_start INTEGER,
         trend INT DEFAULT 0,
         brand TEXT,
         source TEXT CHECK(source IN ('ble','manual','csv')),
@@ -66,6 +89,9 @@ class AppDatabase {
     ''');
     await db.execute('''
       CREATE INDEX idx_glucose_time ON glucose_readings(created_at DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX idx_glucose_minseq ON glucose_readings(min_from_start)
     ''');
     await db.execute('''
       CREATE TABLE community_posts (
@@ -88,38 +114,52 @@ class AppDatabase {
     ''');
   }
 
-  /// 插入读数（BLE / 广播 / 手动通用）
+  /// 插入读数（BLE / 广播 / 手动通用）——库里存 mg/dL（整数精度），
+  /// mmol/L 只在显示时换算。血糖规范单位是 mg/dL，浮点存 mmol/L 四舍五入
+  /// 会导致 5.5→99→5.49 来回抖；存整数 mg/dL 则读写稳定。
   Future<int> insertReading(GlucoseReading reading) async {
     return _db!.insert('glucose_readings', {
-      'value_mmol_l': reading.valueMmolL,
+      'value_mg_dl': reading.valueMgDl.round(),
+      'value_mmol_l': reading.valueMgDl.round() / 18.0182,
+      'min_from_start': reading.minFromStart,
       'trend': reading.trend,
       'brand': reading.brand.displayName,
       'source': 'ble',
     });
   }
 
-  /// 去重插入：同数值 45 秒内已有一条则跳过，返回 false。
-  /// 前台 manager 和后台 isolate 会同时收到同一条广播、先后调插入，
-  /// 不去重库里会成双（同一秒两条 5.5 就是这么来的）。
-  /// 窗口只取 45 秒：同一广播的双写一定在几秒内到达，而发射器
-  /// 下一分钟的新点至少 55 秒后才来——数值不变也要每分钟留一条，
-  /// 所以窗口不能放大到分钟级。
+  /// 去重插入：同一分钟序号（minFromStart）已有则跳过，返回 false。
+  /// AiDEX 每分钟广播一个新序号（55 秒窗口是前台/后台 isolate 双写的
+  /// 到达差，不是发射器 cadence）。旧逻辑按 45 秒同值去重：上一分钟的
+  /// 点和这一分钟的点时间差经常 < 45 秒 → 新点被误杀，看起来像冻结；
+  /// 而同一广播的双写必然同序号 → 按序号去重既防双写又不误杀新点。
+  /// 没有序号的读数（手动/其他品牌）回退到 45 秒同值去重。
   Future<bool> insertReadingDedup(GlucoseReading reading) async {
     try {
-      final rows = await _db!.query(
-        'glucose_readings',
-        orderBy: 'created_at DESC',
-        limit: 1,
-      );
-      if (rows.isNotEmpty) {
-        final v =
-            (rows.first['value_mmol_l'] as num?)?.toDouble() ?? -999;
-        final ts =
-            DateTime.tryParse('${rows.first['created_at']}');
-        if ((v - reading.valueMmolL).abs() < 0.06 &&
-            ts != null &&
-            (reading.timestamp.difference(ts).inSeconds).abs() < 45) {
-          return false;
+      if (reading.minFromStart != null) {
+        final rows = await _db!.query(
+          'glucose_readings',
+          where: 'min_from_start = ?',
+          whereArgs: [reading.minFromStart],
+          limit: 1,
+        );
+        if (rows.isNotEmpty) return false;
+      } else {
+        final rows = await _db!.query(
+          'glucose_readings',
+          orderBy: 'created_at DESC',
+          limit: 1,
+        );
+        if (rows.isNotEmpty) {
+          final v =
+              (rows.first['value_mmol_l'] as num?)?.toDouble() ?? -999;
+          final ts =
+              DateTime.tryParse('${rows.first['created_at']}');
+          if ((v - reading.valueMmolL).abs() < 0.06 &&
+              ts != null &&
+              (reading.timestamp.difference(ts).inSeconds).abs() < 45) {
+            return false;
+          }
         }
       }
     } catch (_) {}

@@ -83,9 +83,9 @@ class GlucoseReading {
           ? rawBrand!
           : brand.displayName;
 
-  /// 从数据库行恢复（created_at 为 "YYYY-MM-DD HH:MM:SS" 本地时间）
+  /// 从数据库行恢复（created_at 为 "YYYY-MM-DD HH:MM:SS" 本地时间）。
+  /// v4 起优先读 value_mg_dl 整数列（规范单位）；老库只有 mmol 列时回退换算。
   factory GlucoseReading.fromDb(Map<String, dynamic> m) {
-    final mmol = (m['value_mmol_l'] as num?)?.toDouble() ?? 0;
     final raw = '${m['brand'] ?? ''}';
     final brand = CgmBrand.values.firstWhere(
       (b) => b.displayName == raw || b.name == raw,
@@ -97,11 +97,16 @@ class GlucoseReading {
     } catch (_) {
       ts = DateTime.now();
     }
+    final mg = m['value_mg_dl'] as num?;
+    final mgDl = mg != null
+        ? mg.toDouble()
+        : ((m['value_mmol_l'] as num?)?.toDouble() ?? 0) * 18.0182;
     return GlucoseReading(
-      valueMgDl: mmol * 18.0182,
+      valueMgDl: mgDl,
       timestamp: ts,
       trend: (m['trend'] as num?)?.toInt() ?? 0,
       brand: brand,
+      minFromStart: (m['min_from_start'] as num?)?.toInt(),
       rawBrand: brand == CgmBrand.unknown && raw.isNotEmpty ? raw : null,
     );
   }

@@ -58,17 +58,20 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     }));
     _subs.add(_manager.readingStream.listen((reading) async {
       // 库去重：前台和后台 isolate 会同时收到同一条广播先后入库，
-      // 先判库里 45 秒内有没有同值，有就只刷 UI 不重复插
-      //（截图里同一秒两条 5.5 就是双写，没去重）
+      // 按发射器分钟序号判重（同一广播必然同序号）。UI 列表同理：
+      // 有序号比序号，无序号才按 45 秒同值比——旧逻辑按同值比会把
+      // 下一分钟同值的新点当重复吞掉，看起来像数值冻结。
       final inserted =
           await AppDatabase.instance.insertReadingDedup(reading);
       if (!mounted) return;
       setState(() {
-        // 同一秒的双回调：列表里已有同值同秒就不重复插
-        final dup = _readings.any((r) =>
-            (r.valueMmolL - reading.valueMmolL).abs() < 0.06 &&
-            r.timestamp.difference(reading.timestamp).inSeconds.abs() <
-                45);
+        final dup = reading.minFromStart != null
+            ? _readings.any(
+                (r) => r.minFromStart == reading.minFromStart)
+            : _readings.any((r) =>
+                (r.valueMmolL - reading.valueMmolL).abs() < 0.06 &&
+                r.timestamp.difference(reading.timestamp).inSeconds.abs() <
+                    45);
         if (!dup) {
           _readings.insert(0, reading);
           if (_readings.length > 100) _readings.removeLast();
@@ -135,7 +138,10 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     return Stream<String>.empty().listen((_) {});
   }
 
-  /// 后台 isolate 发来的 "value|trend|isoTime"：去重入库 + 列表置顶
+  /// 后台 isolate 发来的 "value|trend|isoTime"：去重入库 + 列表置顶。
+  /// 注意 BgSync 消息是 mmol/L 且不带序号：按时间戳+数值去重（45 秒窗口），
+  /// 与 _reloadFromDb 的合并逻辑同口径。新点更大概率靠 _reloadFromDb 补齐，
+  /// 这里只做即时置顶、不强求入库（后台 isolate 自己已写过库）。
   Future<void> _applyBgReading(String msg) async {
     try {
       final parts = msg.split('|');
@@ -152,11 +158,20 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       );
       final inserted =
           await AppDatabase.instance.insertReadingDedup(r);
-      if (!inserted || !mounted) return;
+      if (!mounted) return;
+      // 不管库判重结果如何，只要列表里没有这条就置顶：
+      // 后台 isolate 自己已写库，这边判重失败多半是自己刚写过，
+      // 列表置顶不能省——否则"收了数但列表不显示"。
       setState(() {
-        _readings.insert(0, r);
-        if (_readings.length > 100) _readings.removeLast();
+        final dup = _readings.any((e) =>
+            (e.valueMmolL - r.valueMmolL).abs() < 0.06 &&
+            e.timestamp.difference(r.timestamp).inSeconds.abs() < 120);
+        if (!dup) {
+          _readings.insert(0, r);
+          if (_readings.length > 100) _readings.removeLast();
+        }
       });
+      if (!inserted) return;
       GlucoseOverlay.push(v, trend, _fmtTime(ts));
     } catch (_) {}
   }
