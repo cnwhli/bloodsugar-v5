@@ -17,6 +17,12 @@ import '../watch/multi_watch_arch.dart';
 /// 2. 本机数据库（手机收的数，手表装同包也能读到自己收的）；
 /// 3. 官方血糖表盘走 Health Connect（见 HealthBridge），本页是自研表盘。
 ///
+/// 手势（小屏无按钮，全靠手势）：
+/// - 左右滑：数值 ↔ 历史曲线 ↔ 今日统计 三页切换
+/// - 点一下数值页：手动刷新（库+运动三件套）
+/// - 长按任意页：开始/停止监听
+/// - 点一下曲线页：切换 3h / 6h / 12h / 24h 范围
+///
 /// 预警：低血糖 (<3.9) 蓝屏 + 重震 / 高血糖 (>10) 红屏 + 重震
 class WatchGlucosePage extends StatefulWidget {
   final WatchShape shape; // 屏幕形状（圆形/方形）
@@ -48,6 +54,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   int? _workoutMin;
   Timer? _sportTimer;
 
+  // ---- 历史 + 手势状态 ----
+  final _pager = PageController();
+  int _page = 0;
+  List<_Pt> _hist = []; // 时间正序
+  int _rangeH = 6; // 曲线范围：3 / 6 / 12 / 24，点曲线切换
+
   static const double _lowThreshold = 3.9;
   static const double _highThreshold = 10.0;
 
@@ -72,6 +84,10 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         _brand = r.brandLabel;
         _updatedAt = r.timestamp;
         _hasData = true;
+        _hist.add(_Pt(r.valueMmolL, r.timestamp));
+        if (_hist.length > 500) {
+          _hist = _hist.sublist(_hist.length - 500);
+        }
       });
       _buzzForLevel();
     }));
@@ -103,13 +119,14 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _sportTimer?.cancel();
+    _pager.dispose();
     for (final s in _subs) {
       s.cancel();
     }
     super.dispose();
   }
 
-  /// 抬腕/回前台：血糖从库补最新，运动三件套刷一次——
+  /// 抬腕/回前台：血糖从库补最新（含历史），运动三件套刷一次——
   /// 手表表盘的"抬腕显示"本质就是 resumed 时立刻有数，不转菊花
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -130,24 +147,42 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     });
   }
 
-  /// 先读本机库最新一条（手表独立用：自己扫自己存，不依赖手机）
+  /// 先读本机库最新一条 + 最近 24h 历史（手表独立用：自己扫自己存，不依赖手机）
   Future<void> _loadLocal() async {
     try {
       await AppDatabase.init();
       final rows = await AppDatabase.instance.recentReadings(limit: 1);
+      final hist =
+          await AppDatabase.instance.readingsLast24h(limit: 288);
       if (!mounted) return;
-      if (rows.isNotEmpty) {
-        final ts = DateTime.tryParse('${rows.first['created_at'] ?? ''}');
-        setState(() {
+      final pts = <_Pt>[];
+      for (final m in hist) {
+        final v = (m['value_mmol_l'] as num?)?.toDouble();
+        final t = DateTime.tryParse('${m['created_at'] ?? ''}');
+        if (v != null && v > 0 && t != null) pts.add(_Pt(v, t));
+      }
+      setState(() {
+        _hist = pts;
+        if (rows.isNotEmpty) {
+          final ts =
+              DateTime.tryParse('${rows.first['created_at'] ?? ''}');
           _mmolL =
               (rows.first['value_mmol_l'] as num?)?.toDouble() ?? 0;
           _trend = (rows.first['trend'] as num?)?.toInt() ?? 0;
           _brand = '${rows.first['brand'] ?? ''}';
           if (ts != null) _updatedAt = ts;
           _hasData = _mmolL > 0;
-        });
-      }
+        }
+      });
     } catch (_) {}
+  }
+
+  /// 点一下数值页：手动刷新
+  Future<void> _manualRefresh() async {
+    await _loadLocal();
+    await _loadSport();
+    if (!mounted) return;
+    HapticFeedback.lightImpact();
   }
 
   Future<void> _toggleScan() async {
@@ -187,6 +222,41 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     return '$hh:$mm:$ss';
   }
 
+  String _fmtHM(DateTime ts) {
+    final hh = ts.hour.toString().padLeft(2, '0');
+    final mm = ts.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  // ---- 历史范围过滤 ----
+  List<_Pt> get _ranged {
+    if (_hist.isEmpty) return const [];
+    final cut =
+        DateTime.now().subtract(Duration(hours: _rangeH));
+    return _hist.where((p) => p.t.isAfter(cut)).toList();
+  }
+
+  void _cycleRange() {
+    setState(() {
+      _rangeH = _rangeH == 3
+          ? 6
+          : _rangeH == 6
+              ? 12
+              : _rangeH == 12
+                  ? 24
+                  : 3;
+    });
+    HapticFeedback.selectionClick();
+  }
+
+  /// 数据新鲜度：超过 10 分钟没数就提示
+  String? get _staleTip {
+    if (!_hasData) return null;
+    final min = DateTime.now().difference(_updatedAt).inMinutes;
+    if (min >= 10) return '数据 $min 分钟前，可能断连';
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final statusColor = _lowAlert
@@ -199,7 +269,76 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       backgroundColor: Colors.black,
       body: WatchAdaptiveLayout(
         shape: widget.shape,
-        child: _buildContent(statusColor: statusColor),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Expanded(
+              child: PageView(
+                controller: _pager,
+                onPageChanged: (i) => setState(() => _page = i),
+                children: [
+                  // 第 1 页：当前值（点一下刷新，长按监听开关）
+                  GestureDetector(
+                    onTap: _manualRefresh,
+                    onLongPress: () async {
+                      HapticFeedback.heavyImpact();
+                      await _toggleScan();
+                    },
+                    child: _buildContent(statusColor: statusColor),
+                  ),
+                  // 第 2 页：历史曲线（点一下切换范围，长按监听开关）
+                  GestureDetector(
+                    onTap: _cycleRange,
+                    onLongPress: () async {
+                      HapticFeedback.heavyImpact();
+                      await _toggleScan();
+                    },
+                    child: _buildHistoryPage(),
+                  ),
+                  // 第 3 页：今日统计（点一下刷新，长按监听开关）
+                  GestureDetector(
+                    onTap: _manualRefresh,
+                    onLongPress: () async {
+                      HapticFeedback.heavyImpact();
+                      await _toggleScan();
+                    },
+                    child: _buildStatsPage(statusColor),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            // 页点 + 手势提示
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(
+                3,
+                (i) => Container(
+                  width: 6,
+                  height: 6,
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 3),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _page == i
+                        ? Colors.white
+                        : Colors.white24,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              _page == 0
+                  ? '点一下刷新 · 长按${_lowPowerOn ? '停止' : '开始'}监听 · 右滑看历史'
+                  : _page == 1
+                      ? '点曲线切范围(${_rangeH}h) · 长按${_lowPowerOn ? '停止' : '开始'}监听'
+                      : '点一下刷新 · 长按${_lowPowerOn ? '停止' : '开始'}监听',
+              style:
+                  const TextStyle(fontSize: 9, color: Colors.grey),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -207,6 +346,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   Widget _buildContent({required Color statusColor}) {
     final big = widget.shape.isCircular ? 40.0 : 56.0;
     final small = widget.shape.isCircular ? 11.0 : 13.0;
+    final stale = _staleTip;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -259,6 +399,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
               : '点下方按钮开始监听',
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
+        if (stale != null) ...[
+          const SizedBox(height: 2),
+          Text(stale,
+              style: TextStyle(
+                  fontSize: small - 1, color: Colors.orange)),
+        ],
         const SizedBox(height: 6),
         // 运动三件套：心率 / 步数 / 运动分钟（读不到显示 --，不断层）
         Row(
@@ -288,6 +434,146 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
             style: const TextStyle(fontSize: 12),
           ),
         ),
+      ],
+    );
+  }
+
+  /// 第 2 页：历史曲线（最近 _rangeH 小时，超限红点，点一下切范围）
+  Widget _buildHistoryPage() {
+    final small = widget.shape.isCircular ? 10.0 : 12.0;
+    final pts = _ranged;
+    if (pts.isEmpty) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 24),
+          const Text('--',
+              style: TextStyle(
+                  fontSize: 40,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey)),
+          Text('近 $_rangeH 小时无数据\n点一下切换范围',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: small, color: Colors.grey)),
+        ],
+      );
+    }
+    double mn = pts.first.v, mx = pts.first.v, sum = 0;
+    var low = 0, high = 0;
+    for (final p in pts) {
+      if (p.v < mn) mn = p.v;
+      if (p.v > mx) mx = p.v;
+      sum += p.v;
+      if (p.v < _lowThreshold) {
+        low++;
+      } else if (p.v > _highThreshold) {
+        high++;
+      }
+    }
+    final avg = sum / pts.length;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('近 $_rangeH 小时 · ${pts.length} 点',
+            style: TextStyle(fontSize: small, color: Colors.grey)),
+        const SizedBox(height: 4),
+        SizedBox(
+          height: widget.shape.isCircular ? 110 : 150,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _SparkPainter(
+              pts: pts,
+              low: _lowThreshold,
+              high: _highThreshold,
+            ),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(_fmtHM(pts.first.t),
+                style:
+                    TextStyle(fontSize: small - 1, color: Colors.grey)),
+            Text(_fmtHM(pts.last.t),
+                style:
+                    TextStyle(fontSize: small - 1, color: Colors.grey)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '最高 ${mx.toStringAsFixed(1)} · 平均 ${avg.toStringAsFixed(1)} · 最低 ${mn.toStringAsFixed(1)}',
+          style: TextStyle(fontSize: small - 1, color: Colors.white70),
+        ),
+        Text(
+          low + high == 0
+              ? '全部在范围内 👍'
+              : '偏低 $low 点 · 偏高 $high 点',
+          style: TextStyle(
+              fontSize: small - 1,
+              color: low + high == 0 ? Colors.green : Colors.orange),
+        ),
+      ],
+    );
+  }
+
+  /// 第 3 页：今日统计（TIR/计数/低血糖次数 + 快捷按钮）
+  Widget _buildStatsPage(Color statusColor) {
+    final small = widget.shape.isCircular ? 10.0 : 12.0;
+    final now = DateTime.now();
+    final today =
+        _hist.where((p) => p.t.day == now.day && p.t.month == now.month).toList();
+    String tir = '--';
+    var lowN = 0, highN = 0;
+    if (today.isNotEmpty) {
+      final inR =
+          today.where((p) => p.v >= 3.9 && p.v <= 10.0).length;
+      tir = '${(inR / today.length * 100).toStringAsFixed(0)}%';
+      lowN = today.where((p) => p.v < 3.9).length;
+      highN = today.where((p) => p.v > 10.0).length;
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('今日 · ${today.length} 点',
+            style: TextStyle(fontSize: small, color: Colors.grey)),
+        const SizedBox(height: 6),
+        Text(tir,
+            style: TextStyle(
+                fontSize: widget.shape.isCircular ? 36 : 48,
+                fontWeight: FontWeight.bold,
+                color: statusColor)),
+        Text('TIR 今日',
+            style: TextStyle(fontSize: small, color: Colors.grey)),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _statMini('偏低', '$lowN', Colors.blue, small),
+            _statMini('偏高', '$highN', Colors.red, small),
+            _statMini('db总数', '${_hist.length}', Colors.white70, small),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _lowPowerOn ? '监听中 · $_scanState' : '未监听 · 点长按开始',
+          style: TextStyle(fontSize: small - 1, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
+  Widget _statMini(String label, String v, Color c, double fs) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(v,
+            style: TextStyle(
+                fontSize: fs + 6,
+                fontWeight: FontWeight.bold,
+                color: c)),
+        Text(label,
+            style: TextStyle(fontSize: fs - 1, color: Colors.grey)),
       ],
     );
   }
@@ -336,4 +622,65 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     }
     return '$steps';
   }
+}
+
+class _Pt {
+  final double v;
+  final DateTime t;
+  const _Pt(this.v, this.t);
+}
+
+/// 手表小屏火花线：绿线 + 超限红点 + 3.9/10.0 虚线（省电 CustomPaint，不用 fl_chart）
+class _SparkPainter extends CustomPainter {
+  final List<_Pt> pts;
+  final double low, high;
+  const _SparkPainter(
+      {required this.pts, required this.low, required this.high});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (pts.length < 2) return;
+    const maxV = 15.0;
+    double x(int i) =>
+        size.width * i / (pts.length - 1).clamp(1, 1 << 30);
+    double y(double v) =>
+        size.height - (v.clamp(0, maxV) / maxV) * size.height;
+    final dash = Paint()
+      ..color = const Color(0xFF616161)
+      ..strokeWidth = 1;
+    // 阈值虚线
+    for (final t in [low, high]) {
+      final yy = y(t);
+      var xx = 0.0;
+      while (xx < size.width) {
+        canvas.drawLine(Offset(xx, yy), Offset(xx + 4, yy), dash);
+        xx += 8;
+      }
+    }
+    // 主线
+    final line = Paint()
+      ..color = const Color(0xFF34C759)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()..moveTo(x(0), y(pts.first.v));
+    for (var i = 1; i < pts.length; i++) {
+      path.lineTo(x(i), y(pts[i].v));
+    }
+    canvas.drawPath(path, line);
+    // 超限红点
+    final dot = Paint()..color = const Color(0xFFFF3B30);
+    for (var i = 0; i < pts.length; i++) {
+      if (pts[i].v < low || pts[i].v > high) {
+        canvas.drawCircle(Offset(x(i), y(pts[i].v)), 2.5, dot);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SparkPainter old) =>
+      old.pts.length != pts.length ||
+      (old.pts.isNotEmpty &&
+          pts.isNotEmpty &&
+          old.pts.last.v != pts.last.v);
 }
