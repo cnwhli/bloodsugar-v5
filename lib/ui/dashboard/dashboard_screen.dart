@@ -5,6 +5,8 @@ import 'package:bloodsugar_v5/services/bg_sync.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
+import '../../domain/vitals/vital_types.dart';
+import '../../services/health_bridge.dart';
 import '../ble/glucose_overlay.dart';
 
 /// 首页仪表盘
@@ -25,6 +27,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _latestTime = ''; // 最新读数时间（你要的"血糖时间"）
   DateTime _chartT0 = DateTime.now(); // 曲线首点时间（横轴刻度反推用）
   StreamSubscription<GlucoseReading>? _readingSub;
+  // 健康快照（首页健康卡片：自动同步 + 手动补）
+  HealthSnapshot _snap = const HealthSnapshot();
+  List<Map<String, dynamic>> _todayLogs = [];
 
   @override
   void initState() {
@@ -76,6 +81,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
     final stats = await AppDatabase.instance.weeklyStats();
     if (mounted) setState(() => _stats = stats);
+    // 健康快照 + 今日记录（首页健康卡片用；失败留空显示 --，不挡血糖）
+    try {
+      final snap = await HealthBridge.readTodaySnapshot();
+      final logs = await AppDatabase.instance.todayTreatments();
+      if (mounted) {
+        setState(() {
+          _snap = snap;
+          _todayLogs = logs;
+        });
+        // 自动同步进 vitals 表（换手机/云同步时有底；每天一条快照，去重靠 kind+date）
+        _cacheSnapshot(snap);
+      }
+    } catch (_) {}
+  }
+
+  /// 快照进 vitals 表：有数的项才存，source=health（和手动补的 manual 区分）
+  Future<void> _cacheSnapshot(HealthSnapshot s) async {
+    try {
+      final db = AppDatabase.instance;
+      if (s.bpm != null) {
+        await db.insertVital(
+            kind: 'heart_rate',
+            value1: s.bpm!.toDouble(),
+            unit: 'bpm',
+            source: 'health');
+      }
+      if (s.spo2 != null) {
+        await db.insertVital(
+            kind: 'spo2', value1: s.spo2, unit: '%', source: 'health');
+      }
+      if (s.systolic != null && s.diastolic != null) {
+        await db.insertVital(
+            kind: 'bp',
+            value1: s.systolic!.toDouble(),
+            value2: s.diastolic!.toDouble(),
+            unit: 'mmHg',
+            source: 'health');
+      }
+      if (s.sleepMin != null) {
+        await db.insertVital(
+            kind: 'sleep',
+            value1: s.sleepMin!.toDouble(),
+            unit: 'min',
+            source: 'health');
+      }
+      if (s.steps != null) {
+        await db.insertVital(
+            kind: 'steps',
+            value1: s.steps!.toDouble(),
+            unit: '步',
+            source: 'health');
+      }
+      if (s.weightKg != null) {
+        await db.insertVital(
+            kind: 'weight',
+            value1: s.weightKg,
+            unit: 'kg',
+            source: 'health');
+      }
+      for (final w in s.workouts) {
+        await db.insertVital(
+          kind: 'workout',
+          value1: w.minutes.toDouble(),
+          unit: 'min',
+          source: 'health',
+          device: workoutLabel(w.type),
+        );
+      }
+    } catch (_) {}
   }
 
   String _trendLabel(int trend) {
@@ -285,6 +359,98 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Colors.orange),
                   ],
                 ),
+              const SizedBox(height: 16),
+
+              // 今日健康（自动同步 + 手动补；对标欧态健康 App 的一站式数据）
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('今日健康',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold)),
+                          TextButton(
+                            onPressed: () => Navigator.pushNamed(
+                                context, '/log'),
+                            child: const Text('记一笔 →'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _healthChip(
+                              '❤',
+                              _snap.bpm == null
+                                  ? '--'
+                                  : '${_snap.bpm} bpm',
+                              '心率'),
+                          _healthChip(
+                              '🩸',
+                              _snap.spo2 == null
+                                  ? '--'
+                                  : '${_snap.spo2!.toStringAsFixed(0)}%',
+                              '血氧'),
+                          _healthChip(
+                              '💓',
+                              (_snap.systolic == null ||
+                                      _snap.diastolic == null)
+                                  ? '--'
+                                  : '${_snap.systolic}/${_snap.diastolic}',
+                              '血压'),
+                          _healthChip(
+                              '😴',
+                              _snap.sleepMin == null
+                                  ? '--'
+                                  : formatSleep(_snap.sleepMin!),
+                              '睡眠'),
+                          _healthChip(
+                              '👣',
+                              _snap.steps == null
+                                  ? '--'
+                                  : '${_snap.steps}步',
+                              '步数'),
+                          _healthChip(
+                              '🏃',
+                              _snap.workouts.isEmpty
+                                  ? '--'
+                                  : _snap.workouts
+                                      .map((w) =>
+                                          '${workoutLabel(w.type)}${w.minutes}分')
+                                      .join(' · '),
+                              '运动'),
+                        ],
+                      ),
+                      if (_todayLogs.isNotEmpty) ...[
+                        const Divider(height: 20),
+                        const Text('今日记录',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        for (final m in _todayLogs.take(5))
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 2),
+                            child: Text(
+                              '• ${_fmtTreatmentRow(m)}',
+                              style:
+                                  const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
               const SizedBox(height: 24),
 
               // 快捷操作
@@ -295,6 +461,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   _navButton(Icons.bluetooth, '连接血糖仪', '/ble'),
                   _navButton(Icons.add_circle, '手动录入', '/add'),
+                  _navButton(Icons.edit_note, '记一笔', '/log'),
                   _navButton(Icons.people, '糖友微信群', '/community'),
                   _navButton(Icons.smart_toy, 'AI 助手', '/ai-assistant'),
                   _navButton(
@@ -485,10 +652,55 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _navButton(IconData icon, String label, String route) {
     return ElevatedButton.icon(
-      onPressed: () => Navigator.pushNamed(context, route),
+      onPressed: () => Navigator.pushNamed(context, route).then((_) {
+        // 从子页返回后刷新（记录/读数可能变了）
+        if (mounted) _loadLatest();
+      }),
       icon: Icon(icon),
       label: Text(label),
     );
+  }
+
+  /// 健康小芯片：图标 + 值 + 指标名
+  Widget _healthChip(String icon, String value, String label) {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.grey.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$icon $value',
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.bold)),
+          Text(label,
+              style:
+                  const TextStyle(fontSize: 11, color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+
+  /// treatments 行 → 展示文案（dashboard 轻量拼装，不引 domain/logs）
+  String _fmtTreatmentRow(Map<String, dynamic> m) {
+    final detail = '${m['detail'] ?? ''}';
+    final amount = (m['amount'] as num?)?.toDouble();
+    final unit = '${m['unit'] ?? ''}';
+    final extra = '${m['extra'] ?? ''}';
+    var head = detail;
+    if (amount != null) {
+      final num = amount == amount.roundToDouble()
+          ? '${amount.toInt()}'
+          : '$amount';
+      head = head.isEmpty ? '$num$unit' : '$head $num$unit';
+    }
+    final parts = <String>[];
+    if (head.isNotEmpty) parts.add(head);
+    if (extra.isNotEmpty) parts.add(extra);
+    return parts.isEmpty ? '一条记录' : parts.join(' · ');
   }
 
   Widget _actionButton(

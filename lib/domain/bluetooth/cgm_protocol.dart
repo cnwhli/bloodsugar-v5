@@ -40,12 +40,19 @@ String _u16(String hex) =>
 
 /// CGM 设备类型枚举
 enum CgmBrand {
-  aidexX('AiDEX G7 / X（微泰）', '0000181f-0000-1000-8000-00805f9b34fb'),
+  aidexX('AiDEX G7 / X（微泰二代）', '0000181f-0000-1000-8000-00805f9b34fb'),
+  aidexLinX('AiDEX LinX（微泰分体式，需官方App配对后广播）', '0000181f-0000-1000-8000-00805f9b34fb'),
   libre2('Libre 2', '0000fde3-0000-1000-8000-00805f9b34fb'),
   libre3('Libre 3', '089810cc-ef89-11e9-81b4-2a2ae2dbcce4'),
   dexcomG6('Dexcom G6', 'f8083532-849e-531c-c594-30f1f86a4ea5'),
   dexcomG7('Dexcom G7', 'f8083532-849e-531c-c594-30f1f86a4ea5'),
   sibionics('Sibionics 硅基 GS1/GS3', '00005347-0000-1000-8000-00805f9b34fb'),
+  sibionicsLite('Sibionics 硅基轻享/动感分体式（发射器复用，握手待验证）',
+      '00005347-0000-1000-8000-00805f9b34fb'),
+  sinocareICan('三诺爱看 iCan（一体式，3代传感技术，协议闭源，需抓包验证）',
+      '0000181f-0000-1000-8000-00805f9b34fb'),
+  ottaiM8('欧态 Ottai M8（14天/5分钟，需官方App激活后抓包验证）',
+      '0000181f-0000-1000-8000-00805f9b34fb'),
   accuSmartGuide(
       'Accu-Chek SmartGuide', '0000181f-0000-1000-8000-00805f9b34fb'),
   medtronicGuardian4('Medtronic Guardian 4', '0000181f-0000-1000-8000-00805f9b34fb'),
@@ -86,12 +93,16 @@ class GlucoseReading {
 
   /// 从数据库行恢复（created_at 为 "YYYY-MM-DD HH:MM:SS" 本地时间）。
   /// v4 起优先读 value_mg_dl 整数列（规范单位）；老库只有 mmol 列时回退换算。
+  /// displayName 改名后老数据可能对不上：再按 serviceUuid/核心关键字兜底。
   factory GlucoseReading.fromDb(Map<String, dynamic> m) {
     final raw = '${m['brand'] ?? ''}';
-    final brand = CgmBrand.values.firstWhere(
+    var brand = CgmBrand.values.firstWhere(
       (b) => b.displayName == raw || b.name == raw,
       orElse: () => CgmBrand.unknown,
     );
+    if (brand == CgmBrand.unknown && raw.contains('AiDEX')) {
+      brand = CgmBrand.aidexX; // 老库"AiDEX G7 / X（微泰）"改名后兜底
+    }
     DateTime ts;
     try {
       ts = DateTime.parse('${m['created_at']}');
@@ -543,6 +554,80 @@ class AccuSmartGuideProtocol extends CgmProtocol {
   }
 }
 
+// ==================== 硅基分体式（轻享/动感分体） ===================
+/// 同 5347/FF31/FF32 通道，发射器可复用 18 个月、换探头续用。
+/// 分体款握手可能与一体式 GS1 不同：先按同命令试，失败则日志提示，
+/// 等真机抓包确认后再分支。
+class SibionicsLiteProtocol extends SibionicsProtocol {
+  @override
+  CgmBrand get brand => CgmBrand.sibionicsLite;
+
+  @override
+  bool matches(ScanResult r) {
+    // 先走父类匹配（设备名 10 位大写数字字母 / 5347 service），
+    // 真机确认分体款广播特征后再收紧，避免和一体式抢设备。
+    return super.matches(r);
+  }
+
+  @override
+  Future<void> handleDevice(
+    BluetoothDevice device,
+    void Function(GlucoseReading) onReading,
+    void Function(String) log,
+  ) async {
+    log('硅基分体式：先按 GS1 握手试连 ${device.platformName}，'
+        '失败请反馈蓝牙页日志，待真机抓包分支');
+    return super.handleDevice(device, onReading, log);
+  }
+}
+
+// ==================== 三诺爱看 iCan ===================
+/// 2023 年上市，第三代传感技术，一体式。目前无公开 BLE 协议：
+/// 无开源实现（xDrip/Juggluco/DiaBLE 均未覆盖），需官方 App 配对后抓包
+/// 确认广播 service/广播字段。先注册名字匹配占位，不抢其他品牌设备。
+class SinocareICanProtocol extends CgmProtocol {
+  @override
+  CgmBrand get brand => CgmBrand.sinocareICan;
+
+  @override
+  List<String> get serviceUuids => [];
+
+  @override
+  List<String> get subscriptionUuids => const [];
+
+  @override
+  bool matches(ScanResult r) {
+    final name = r.advertisementData.advName.toLowerCase();
+    return name.contains('sinocare') ||
+        name.contains('ican') ||
+        name.contains('三诺') ||
+        name.contains('爱看');
+  }
+}
+
+// ==================== 欧态 Ottai M8 ===================
+/// 14 天/每 5 分钟，需"欧态健康"App 贴近扫描激活（60 分钟预热）。
+/// 目前无公开 BLE 协议，需官方 App 激活后抓包确认广播字段。
+/// 先注册名字匹配占位，不抢其他品牌设备。
+class OttaiM8Protocol extends CgmProtocol {
+  @override
+  CgmBrand get brand => CgmBrand.ottaiM8;
+
+  @override
+  List<String> get serviceUuids => [];
+
+  @override
+  List<String> get subscriptionUuids => const [];
+
+  @override
+  bool matches(ScanResult r) {
+    final name = r.advertisementData.advName.toLowerCase();
+    return name.contains('ottai') ||
+        name.contains('欧态') ||
+        name.contains('m8');
+  }
+}
+
 // ==================== BLE CGM 管理器 ====================
 class BleCgmManager {
   static final BleCgmManager _instance = BleCgmManager._internal();
@@ -555,7 +640,10 @@ class BleCgmManager {
     Libre3Protocol(),
     DexcomG6Protocol(),
     DexcomG7Protocol(),
-    SibionicsProtocol(),
+    SibionicsLiteProtocol(), // 硅基分体式先试（同通道，日志会标分体式）
+    SibionicsProtocol(), // 硅基一体式 GS1/GS3
+    SinocareICanProtocol(), // 三诺爱看：名字占位，协议待抓包
+    OttaiM8Protocol(), // 欧态 M8：名字占位，协议待抓包
     AccuSmartGuideProtocol(),
     // Medtronic 私有协议无公开实现，暂不注册
   ];

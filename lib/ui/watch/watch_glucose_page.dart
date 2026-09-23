@@ -6,6 +6,7 @@ import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
+import '../../domain/vitals/vital_types.dart';
 import '../watch/multi_watch_arch.dart';
 
 /// 手表端血糖页面（OPPO Watch X 优先，同时手机可预览）
@@ -52,6 +53,9 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   int? _bpm;
   int? _steps;
   int? _workoutMin;
+  double? _spo2;
+  String? _bp; // "120/80"
+  String? _sleep; // "6小时30分"
   Timer? _sportTimer;
 
   // ---- 历史 + 手势状态 ----
@@ -136,14 +140,19 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     }
   }
 
-  /// 心率/步数/运动时长（三件套，失败就留空显示 --）
+  /// 心率/步数/运动时长/血氧/血压/睡眠（失败就留空显示 --）
   Future<void> _loadSport() async {
-    final r = await HealthBridge.readSportToday();
+    final r = await HealthBridge.readTodaySnapshot();
     if (!mounted) return;
     setState(() {
       _bpm = r.bpm;
       _steps = r.steps;
-      _workoutMin = r.workoutMin;
+      _workoutMin = r.workouts.isEmpty ? null : r.workoutMin;
+      _spo2 = r.spo2;
+      _bp = (r.systolic != null && r.diastolic != null)
+          ? '${r.systolic}/${r.diastolic}'
+          : null;
+      _sleep = r.sleepMin != null ? formatSleep(r.sleepMin!) : null;
     });
   }
 
@@ -406,7 +415,8 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
                   fontSize: small - 1, color: Colors.orange)),
         ],
         const SizedBox(height: 6),
-        // 运动三件套：心率 / 步数 / 运动分钟（读不到显示 --，不断层）
+        // 健康六件套：心率 / 步数 / 运动分钟 / 血氧 / 血压 / 睡眠
+        // （读不到显示 --，不断层）
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
@@ -415,6 +425,16 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
             _sportItem('👣', _fmtSteps(_steps), '步', small),
             _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
                 '分钟', small),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _sportItem('🩸', _spo2 == null ? '--' : _spo2!.toStringAsFixed(0),
+                '%血氧', small),
+            _sportItem('💓', _bp ?? '--', '血压', small),
+            _sportItem('😴', _sleep ?? '--', '睡眠', small),
           ],
         ),
         const SizedBox(height: 8),

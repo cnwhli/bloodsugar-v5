@@ -21,7 +21,7 @@ class AppDatabase {
     final dbPath = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dbPath, 'bloodsugar.db'),
-      version: 4,
+      version: 6,
       onCreate: _createTables,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
@@ -69,6 +69,46 @@ class AppDatabase {
                 'CREATE INDEX idx_glucose_minseq ON glucose_readings(min_from_start)');
           } catch (_) {}
         }
+        if (oldV < 5) {
+          // v5：新增 vitals 表（运动健康统一入口，心率/血氧/血压/睡眠/步数/体重/运动）。
+          // source=health（系统平台自动同步）/manual（无传感器手动补）/ble（直连设备）。
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS vitals (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              kind TEXT NOT NULL,
+              value1 REAL,
+              value2 REAL,
+              unit TEXT,
+              source TEXT CHECK(source IN ('health','manual','ble')) DEFAULT 'manual',
+              device TEXT,
+              recorded_at TEXT DEFAULT (datetime('now','localtime')),
+              created_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+          ''');
+          try {
+            await db.execute(
+                'CREATE INDEX idx_vitals_kind_time ON vitals(kind, recorded_at DESC)');
+          } catch (_) {}
+        }
+        if (oldV < 6) {
+          // v6：新增 treatments 表（用药/打针/饮食/运动记录，对标欧态健康App日志）。
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS treatments (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              type TEXT NOT NULL,
+              detail TEXT,
+              amount REAL,
+              unit TEXT,
+              extra TEXT,
+              recorded_at TEXT DEFAULT (datetime('now','localtime')),
+              created_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+          ''');
+          try {
+            await db.execute(
+                'CREATE INDEX idx_treatments_time ON treatments(recorded_at DESC)');
+          } catch (_) {}
+        }
       },
     );
   }
@@ -111,6 +151,39 @@ class AppDatabase {
         device_name TEXT,
         paired_at TEXT DEFAULT (datetime('now','localtime'))
       )
+    ''');
+    // v5 新装：vitals 与升级路径同结构（见 onUpgrade oldV<5）
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS vitals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        value1 REAL,
+        value2 REAL,
+        unit TEXT,
+        source TEXT CHECK(source IN ('health','manual','ble')) DEFAULT 'manual',
+        device TEXT,
+        recorded_at TEXT DEFAULT (datetime('now','localtime')),
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX idx_vitals_kind_time ON vitals(kind, recorded_at DESC)
+    ''');
+    // v6 新装：treatments 与升级路径同结构（见 onUpgrade oldV<6）
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS treatments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        detail TEXT,
+        amount REAL,
+        unit TEXT,
+        extra TEXT,
+        recorded_at TEXT DEFAULT (datetime('now','localtime')),
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX idx_treatments_time ON treatments(recorded_at DESC)
     ''');
   }
 
@@ -295,5 +368,109 @@ class AppDatabase {
       where: 'device_id = ?',
       whereArgs: [deviceId],
     );
+  }
+
+  // ==================== 运动健康（vitals 表）====================
+  //
+  // kind：heart_rate（心率bpm）/ resting_hr（静息心率）/ spo2（血氧%）/
+  //   bp（血压，value1=收缩 value2=舒张）/ sleep（睡眠分钟）/
+  //   steps（步数）/ weight（体重kg）/ workout（运动分钟，device=跑步/游泳/步行…）/
+  //   calories（消耗kcal）
+  // source：health（系统平台自动同步）/ manual（无传感器手动补）/ ble（直连设备）
+
+  Future<int> insertVital({
+    required String kind,
+    double? value1,
+    double? value2,
+    String? unit,
+    String source = 'manual',
+    String? device,
+    DateTime? recordedAt,
+  }) async {
+    String fmt(DateTime t) =>
+        '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+    return _db!.insert('vitals', {
+      'kind': kind,
+      'value1': value1,
+      'value2': value2,
+      'unit': unit,
+      'source': source,
+      'device': device,
+      if (recordedAt != null) 'recorded_at': fmt(recordedAt),
+    });
+  }
+
+  /// 某指标最近一条（首页今日卡片用）
+  Future<Map<String, dynamic>?> latestVital(String kind) async {
+    final rows = await _db!.query(
+      'vitals',
+      where: 'kind = ?',
+      whereArgs: [kind],
+      orderBy: 'recorded_at DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 某指标最近 N 天（健康页曲线用）
+  Future<List<Map<String, dynamic>>> vitalsLastDays(String kind,
+      {int days = 7, int limit = 500}) async {
+    return _db!.query(
+      'vitals',
+      where: 'kind = ? AND recorded_at >= datetime(\'now\',\'localtime\',\'-$days days\')',
+      whereArgs: [kind],
+      orderBy: 'recorded_at ASC',
+      limit: limit,
+    );
+  }
+
+  // ==================== 用药/打针/饮食/运动记录（treatments 表）====================
+  //
+  // type：insulin（胰岛素）/ medication（口服药）/ food（饮食）/ exercise（运动）/ note（备注）
+  // 记录≠给药：只记"打了什么/吃了什么"，不发任何指令到泵（半闭环安全线）。
+
+  Future<int> insertTreatment({
+    required String type,
+    String? detail, // 药名/食物名/运动名，如"门冬""二甲双胍""螺蛳粉"
+    double? amount, // 剂量/数量，如 6（U）、500（mg）
+    String? unit, // 单位：U / mg / 碗 / 分钟
+    String? extra, // 注射部位/备注，如"腹部"
+    DateTime? recordedAt,
+  }) async {
+    String fmt(DateTime t) =>
+        '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+    return _db!.insert('treatments', {
+      'type': type,
+      'detail': detail,
+      'amount': amount,
+      'unit': unit,
+      'extra': extra,
+      if (recordedAt != null) 'recorded_at': fmt(recordedAt),
+    });
+  }
+
+  /// 最近 N 条治疗记录（首页"今日记录" + 记录页列表用）
+  Future<List<Map<String, dynamic>>> recentTreatments(
+      {int limit = 50}) async {
+    return _db!.query(
+      'treatments',
+      orderBy: 'recorded_at DESC',
+      limit: limit,
+    );
+  }
+
+  /// 今日治疗记录（首页今日卡片用）
+  Future<List<Map<String, dynamic>>> todayTreatments() async {
+    return _db!.query(
+      'treatments',
+      where: "date(recorded_at) = date('now','localtime')",
+      orderBy: 'recorded_at DESC',
+    );
+  }
+
+  Future<void> deleteTreatment(int id) async {
+    await _db!.delete('treatments', where: 'id = ?', whereArgs: [id]);
   }
 }
