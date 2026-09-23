@@ -27,7 +27,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _latestTime = ''; // 最新读数时间（你要的"血糖时间"）
   DateTime _chartT0 = DateTime.now(); // 曲线首点时间（横轴刻度反推用）
   StreamSubscription<GlucoseReading>? _readingSub;
-  // 健康快照（首页健康卡片：自动同步 + 手动补）
+  // 健康快照（首页健康卡片：自动同步优先，手动补兜底）
   HealthSnapshot _snap = const HealthSnapshot();
   List<Map<String, dynamic>> _todayLogs = [];
 
@@ -92,6 +92,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         });
         // 自动同步进 vitals 表（换手机/云同步时有底；每天一条快照，去重靠 kind+date）
         _cacheSnapshot(snap);
+        // 自动同步失败的项，用今天手动补的数兜底（source=manual，不冒充自动）
+        _fillFromManual();
       }
     } catch (_) {}
   }
@@ -149,6 +151,163 @@ class _DashboardScreenState extends State<DashboardScreen> {
           device: workoutLabel(w.type),
         );
       }
+    } catch (_) {}
+  }
+
+  /// 快捷手动补：从首页今日健康卡片的芯片点进来。
+  /// kind：heart_rate（单值）/ spo2（单值）/ bp（收缩+舒张）/ sleep（小时）/ steps（单值）
+  /// 存 source=manual，今天的手动只兜底今天（todayVital），不污染自动数。
+  Future<void> _quickManual(
+      BuildContext context, String kind, String label, String unit) async {
+    final v1Ctrl = TextEditingController();
+    final v2Ctrl = TextEditingController();
+    final isBp = kind == 'bp';
+    final isSleep = kind == 'sleep';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('手动补$label'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: v1Ctrl,
+              keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true),
+              decoration: InputDecoration(
+                labelText: isBp
+                    ? '收缩压（mmHg）'
+                    : isSleep
+                        ? '睡眠（小时，如 6.5）'
+                        : '$label（$unit）',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            if (isBp) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: v2Ctrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true),
+                decoration: const InputDecoration(
+                  labelText: '舒张压（mmHg）',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            const Text('没戴手表/设备没数时手填；戴了设备以自动同步为准。',
+                style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('保存')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final v1 = double.tryParse(v1Ctrl.text.trim());
+      if (v1 == null || v1 <= 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('数值不对，再看看')));
+        }
+        return;
+      }
+      if (isBp) {
+        final v2 = double.tryParse(v2Ctrl.text.trim());
+        if (v2 == null || v2 <= 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('舒张压不对，再看看')));
+          }
+          return;
+        }
+        await AppDatabase.instance.insertVital(
+            kind: 'bp', value1: v1, value2: v2, unit: 'mmHg');
+      } else if (isSleep) {
+        await AppDatabase.instance.insertVital(
+            kind: 'sleep', value1: v1 * 60, unit: 'min');
+      } else {
+        await AppDatabase.instance.insertVital(
+            kind: kind, value1: v1, unit: unit);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('已补$label')));
+        _loadLatest(); // 刷新后卡片从 -- 变成刚填的数
+      }
+    } catch (_) {}
+  }
+
+  /// 快捷记运动：从今日健康卡片点进来，直接进记一笔的运动页
+  void _quickExercise(BuildContext context) {
+    Navigator.pushNamed(context, '/log')
+        .then((_) => _loadLatest());
+  }
+
+  /// 自动同步缺项，用"今天手动补的数"兜底显示。
+  /// 优先级：health（手表/系统平台自动）> manual（今天手填）。
+  /// 昨天的手动数不冒充今天（todayVital 只查当天）。
+  /// 每项只在自动失败（snap 为 null）时才读手动，避免覆盖自动数。
+  Future<void> _fillFromManual() async {
+    try {
+      final db = AppDatabase.instance;
+      var bpm = _snap.bpm;
+      var spo2 = _snap.spo2;
+      var sys = _snap.systolic;
+      var dia = _snap.diastolic;
+      var sleepMin = _snap.sleepMin;
+      var steps = _snap.steps;
+      var weight = _snap.weightKg;
+      double? num1(Map<String, dynamic>? m) =>
+          (m?['value1'] as num?)?.toDouble();
+      if (bpm == null) {
+        bpm = num1(await db.todayVital('heart_rate'))?.round();
+      }
+      if (spo2 == null) {
+        spo2 = num1(await db.todayVital('spo2'));
+      }
+      if (sys == null || dia == null) {
+        final m = await db.todayVital('bp');
+        if (m != null) {
+          sys = num1(m)?.round();
+          dia = (m['value2'] as num?)?.toDouble().round();
+        }
+      }
+      if (sleepMin == null) {
+        sleepMin = num1(await db.todayVital('sleep'))?.round();
+      }
+      if (steps == null) {
+        steps = num1(await db.todayVital('steps'))?.round();
+      }
+      if (weight == null) {
+        weight = num1(await db.todayVital('weight'));
+      }
+      if (!mounted) return;
+      setState(() {
+        _snap = HealthSnapshot(
+          bpm: bpm,
+          restingHr: _snap.restingHr,
+          spo2: spo2,
+          systolic: sys,
+          diastolic: dia,
+          weightKg: weight,
+          steps: steps,
+          sleepMin: sleepMin,
+          walkRunKm: _snap.walkRunKm,
+          swimKm: _snap.swimKm,
+          cycleKm: _snap.cycleKm,
+          caloriesKcal: _snap.caloriesKcal,
+          workouts: _snap.workouts,
+        );
+      });
     } catch (_) {}
   }
 
@@ -361,7 +520,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               const SizedBox(height: 16),
 
-              // 今日健康（自动同步 + 手动补；对标欧态健康 App 的一站式数据）
+              // 今日健康（自动同步优先 + 手动补兜底；对标欧态健康 App 的一站式数据）
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
@@ -382,42 +541,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                         ],
                       ),
+                      const Text('手表/手环戴上自动同步；没戴就点一下芯片手填',
+                          style:
+                              TextStyle(fontSize: 11, color: Colors.grey)),
                       const SizedBox(height: 4),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
+                          // 能点：-- 的芯片点一下直接手填，有数的点一下可覆盖修正
                           _healthChip(
                               '❤',
                               _snap.bpm == null
                                   ? '--'
                                   : '${_snap.bpm} bpm',
-                              '心率'),
+                              '心率',
+                              onTap: () => _quickManual(
+                                  context, 'heart_rate', '心率', 'bpm')),
                           _healthChip(
                               '🩸',
                               _snap.spo2 == null
                                   ? '--'
                                   : '${_snap.spo2!.toStringAsFixed(0)}%',
-                              '血氧'),
+                              '血氧',
+                              onTap: () => _quickManual(
+                                  context, 'spo2', '血氧', '%')),
                           _healthChip(
                               '💓',
                               (_snap.systolic == null ||
                                       _snap.diastolic == null)
                                   ? '--'
                                   : '${_snap.systolic}/${_snap.diastolic}',
-                              '血压'),
+                              '血压',
+                              onTap: () => _quickManual(
+                                  context, 'bp', '血压', 'mmHg')),
                           _healthChip(
                               '😴',
                               _snap.sleepMin == null
                                   ? '--'
                                   : formatSleep(_snap.sleepMin!),
-                              '睡眠'),
+                              '睡眠',
+                              onTap: () => _quickManual(
+                                  context, 'sleep', '睡眠', '小时')),
                           _healthChip(
                               '👣',
                               _snap.steps == null
                                   ? '--'
                                   : '${_snap.steps}步',
-                              '步数'),
+                              '步数',
+                              onTap: () => _quickManual(
+                                  context, 'steps', '步数', '步')),
                           _healthChip(
                               '🏃',
                               _snap.workouts.isEmpty
@@ -426,7 +599,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       .map((w) =>
                                           '${workoutLabel(w.type)}${w.minutes}分')
                                       .join(' · '),
-                              '运动'),
+                              '运动',
+                              onTap: () => _quickExercise(context)),
                         ],
                       ),
                       if (_todayLogs.isNotEmpty) ...[
@@ -661,9 +835,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// 健康小芯片：图标 + 值 + 指标名
-  Widget _healthChip(String icon, String value, String label) {
-    return Container(
+  /// 健康小芯片：图标 + 值 + 指标名（可点：没自动数时点一下手填）
+  Widget _healthChip(String icon, String value, String label,
+      {VoidCallback? onTap}) {
+    final inner = Container(
       padding:
           const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -681,6 +856,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const TextStyle(fontSize: 11, color: Colors.grey)),
         ],
       ),
+    );
+    if (onTap == null) return inner;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: inner,
     );
   }
 

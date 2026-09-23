@@ -413,6 +413,19 @@ class AppDatabase {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// 某指标今日最近一条（首页"今日健康"手动兜底用：只取今天的，
+  /// 昨天的手动数不冒充今天，避免误导）
+  Future<Map<String, dynamic>?> todayVital(String kind) async {
+    final rows = await _db!.query(
+      'vitals',
+      where: "kind = ? AND date(recorded_at) = date('now','localtime')",
+      whereArgs: [kind],
+      orderBy: 'recorded_at DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
   /// 某指标最近 N 天（健康页曲线用）
   Future<List<Map<String, dynamic>>> vitalsLastDays(String kind,
       {int days = 7, int limit = 500}) async {
