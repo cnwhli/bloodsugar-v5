@@ -338,8 +338,6 @@ class Libre2Protocol extends CgmProtocol {
 
   @override
   bool matches(ScanResult r) {
-    final name = r.advertisementData.advName.toLowerCase();
-    if (name.contains('libre')) return true;
     return r.advertisementData.serviceUuids
         .map((g) => g.toString().toLowerCase())
         .contains(_u16('FDE3'));
@@ -387,8 +385,6 @@ class Libre3Protocol extends CgmProtocol {
 
   @override
   bool matches(ScanResult r) {
-    final name = r.advertisementData.advName.toLowerCase();
-    if (name.contains('libre')) return true;
     return r.advertisementData.serviceUuids
         .map((g) => g.toString().toLowerCase())
         .contains(dataSvc);
@@ -437,8 +433,8 @@ class DexcomG6Protocol extends CgmProtocol {
 
   @override
   bool matches(ScanResult r) {
-    final name = r.advertisementData.advName.toLowerCase();
-    if (name.startsWith('dxcm') || name.contains('dexcom')) return true;
+    // G6/G7 只靠广播服务 UUID 匹配：DXCM 开头的名字也可能被其他 Dexcom
+    // 外设占用，名字匹配会误抢（手表连不上 AiDEX 的一类嫌疑）。
     final svcs = r.advertisementData.serviceUuids
         .map((g) => g.toString().toLowerCase())
         .toSet();
@@ -514,8 +510,9 @@ class SibionicsProtocol extends CgmProtocol {
     void Function(GlucoseReading) onReading,
     void Function(String) log,
   ) async {
-    // TODO: FF32 握手命令序列（Si3GattCallback + gs3Glucose），FF31 通知解析
-    log('Sibionics 握手待真机联调，已发现设备 ${device.platformName}');
+    // 硅基是连接型：这里先只做发现日志，不建连（避免和 AiDEX 广播抢设备）。
+    // 真机联调补完 FF32 握手/FF31 解析后再建连。
+    log('发现硅基设备 ${device.platformName}（握手待真机联调，暂不连接）');
   }
 }
 
