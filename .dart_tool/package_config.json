@@ -476,6 +476,12 @@
       "languageVersion": "3.8"
     },
     {
+      "name": "home_widget",
+      "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/home_widget-0.10.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.10"
+    },
+    {
       "name": "hooks",
       "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/hooks-2.0.2",
       "packageUri": "lib/",

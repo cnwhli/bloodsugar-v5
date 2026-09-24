@@ -7,6 +7,7 @@ import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
 import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
+import '../../services/phone_widget.dart';
 import 'cgm_foreground_service.dart';
 import 'glucose_overlay.dart';
 
@@ -87,6 +88,12 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       // 悬浮窗同步最新值（含时间）
       GlucoseOverlay.push(reading.valueMmolL, reading.trend,
           _fmtTime(reading.timestamp));
+      // 桌面小组件同步推（蓝牙页收到第一手数，首页还没刷也先上桌面）
+      PhoneWidget.push(
+        mmolL: reading.valueMmolL,
+        trendLabel: _trendArrow(reading.trend),
+        time: _fmtTime(reading.timestamp),
+      );
       // 超阈值报警（震动/声音/震动+声音，由设置页决定）
       if (mounted) {
         final msg = await AlertService().check(reading.valueMmolL);
@@ -218,6 +225,22 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       return '$hh:$mm:$ss';
     }
     return '${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')} $hh:$mm';
+  }
+
+  /// 趋势箭头（桌面小组件用：小组件面积极小，只放箭头不放文字）
+  String _trendArrow(int trend) {
+    switch (trend) {
+      case 1:
+        return '↗';
+      case 2:
+        return '↗↗';
+      case 3:
+        return '↘';
+      case 4:
+        return '↘↘';
+      default:
+        return '→';
+    }
   }
 
   @override

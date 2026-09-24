@@ -7,6 +7,7 @@ import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../domain/vitals/vital_types.dart';
 import '../../services/health_bridge.dart';
+import '../../services/phone_widget.dart';
 import '../ble/glucose_overlay.dart';
 
 /// 首页仪表盘
@@ -79,6 +80,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         // 首页也同步推悬浮窗（蓝牙页开了悬浮窗后退回首页仍更新）
         GlucoseOverlay.push(_currentGlucose,
             (latest.first['trend'] as num?)?.toInt() ?? 0, _latestTime);
+        // 桌面小组件同步推（心率/步数用当前快照的，有就带上）
+        PhoneWidget.push(
+          mmolL: _currentGlucose,
+          trendLabel: _trend,
+          time: _latestTime,
+          bpm: _snap.bpm,
+          steps: _snap.steps,
+        );
       }
     });
     final stats = await AppDatabase.instance.weeklyStats();
@@ -530,6 +539,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Colors.orange),
                   ],
                 ),
+              const SizedBox(height: 16),
+
+              // 桌面小组件（一键钉到桌面：血糖+心率步数，不开 App 也能看）
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.widgets_outlined),
+                  title: const Text('桌面小组件'),
+                  subtitle: const Text('血糖大数字放手机桌面，点一下进 App'),
+                  trailing: FilledButton.tonal(
+                    onPressed: () async {
+                      final ok =
+                          await PhoneWidget.isPinSupported();
+                      if (!context.mounted) return;
+                      if (ok) {
+                        await PhoneWidget.requestPin();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                '长按手机桌面空白处 → 添加小组件 → 选“血糖管家”即可'),
+                            duration: Duration(seconds: 5),
+                          ),
+                        );
+                      }
+                    },
+                    child: const Text('加到桌面'),
+                  ),
+                ),
+              ),
               const SizedBox(height: 16),
 
               // 今日健康（自动同步优先 + 手动补兜底；对标欧态健康 App 的一站式数据）

@@ -19,6 +19,7 @@
         "flutter_secure_storage",
         "google_fonts",
         "health",
+        "home_widget",
         "http",
         "intl",
         "path_provider",
@@ -137,6 +138,15 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "home_widget",
+      "version": "0.10.0",
+      "dependencies": [
+        "flutter",
+        "path_provider",
+        "path_provider_foundation"
       ]
     },
     {
@@ -909,6 +919,16 @@
       ]
     },
     {
+      "name": "path_provider_foundation",
+      "version": "2.6.0",
+      "dependencies": [
+        "ffi",
+        "flutter",
+        "objective_c",
+        "path_provider_platform_interface"
+      ]
+    },
+    {
       "name": "win32_registry",
       "version": "2.1.0",
       "dependencies": [
@@ -1333,16 +1353,6 @@
       ]
     },
     {
-      "name": "path_provider_foundation",
-      "version": "2.6.0",
-      "dependencies": [
-        "ffi",
-        "flutter",
-        "objective_c",
-        "path_provider_platform_interface"
-      ]
-    },
-    {
       "name": "path_provider_android",
       "version": "2.3.1",
       "dependencies": [
@@ -1598,14 +1608,6 @@
       ]
     },
     {
-      "name": "xdg_directories",
-      "version": "1.1.0",
-      "dependencies": [
-        "meta",
-        "path"
-      ]
-    },
-    {
       "name": "objective_c",
       "version": "9.5.0",
       "dependencies": [
@@ -1616,6 +1618,14 @@
         "logging",
         "meta",
         "pub_semver"
+      ]
+    },
+    {
+      "name": "xdg_directories",
+      "version": "1.1.0",
+      "dependencies": [
+        "meta",
+        "path"
       ]
     },
     {
