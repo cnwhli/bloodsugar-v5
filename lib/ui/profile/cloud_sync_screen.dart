@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../services/cloud_sync.dart';
-import 'watch_login_scan_screen.dart';
+import 'pairing_code_screen.dart';
 
 /// 云同步页：Supabase 账号登录 + 一键同步 + 换设备恢复。
 ///
@@ -24,7 +23,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
   bool _busy = false;
   bool _ready = false;
   bool _loggedIn = false;
-  String? _qrPayload; // 手表扫码登录的二维码内容（点一下出一个，点码隐藏）
+  String? _pairCode; // 手机出的 6 位配对码（手表输码登录，点码隐藏）
 
   @override
   void initState() {
@@ -126,8 +125,8 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
             ),
             const SizedBox(height: 8),
             if (!_loggedIn) ...[
-              // 手表上小屏输密码不现实：优先扫码（手机云同步页出码），
-              // 实在没手机在身边才手动输邮箱密码。
+              // 手表没摄像头不能扫码：手表输手机上显示的 6 位配对码登录。
+              // （圆屏小屏优先配对码；扫码入口留给有摄像头的设备。）
               OutlinedButton.icon(
                 onPressed: _busy
                     ? null
@@ -136,14 +135,14 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                           context,
                           MaterialPageRoute(
                               builder: (_) =>
-                                  const WatchLoginScanScreen()),
+                                  const PairingCodeScreen()),
                         );
                         if (ok == true && mounted) {
                           setState(() => _loggedIn = true);
                         }
                       },
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('扫码登录（扫手机上的码）'),
+                icon: const Icon(Icons.pin),
+                label: const Text('配对码登录（手表输6位数字）'),
               ),
               const SizedBox(height: 8),
               const Row(
@@ -220,8 +219,8 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                 label: const Text('立即同步 / 从云端恢复'),
               ),
               const SizedBox(height: 8),
-              // 手表免输密码登录：手机显示二维码（60秒有效），手表扫一下
-              // 就是同一账号——手表圆屏小，输邮箱密码不现实。
+              // 手机出 6 位配对码（5 分钟有效，一次即焚）：手表没摄像头，
+              // 云同步页输码即登录同一账号——圆屏输 6 个数字最现实。
               OutlinedButton.icon(
                 onPressed: _busy
                     ? null
@@ -229,17 +228,17 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                         setState(() {
                           _busy = true;
                           _msg = '';
-                          _qrPayload = null;
+                          _pairCode = null;
                         });
                         try {
-                          final p =
-                              await CloudSync.readLoginQrPayload();
+                          final c =
+                              await CloudSync.createPairingCode();
                           if (!mounted) return;
                           setState(() {
-                            _qrPayload = p;
-                            _msg = p == null
-                                ? '先登录账号（二维码和登录同寿命，要先有登录）'
-                                : '手表打开 云同步→扫码登录，扫这个码（60秒有效，过期点一下重出）';
+                            _pairCode = c;
+                            _msg = c == null
+                                ? '生成失败：先登录账号（配对码和登录同寿命）'
+                                : '手表打开 云同步→配对码登录，输这 6 位（5分钟有效，一次即焚）';
                           });
                         } catch (e) {
                           if (!mounted) return;
@@ -248,20 +247,20 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                           if (mounted) setState(() => _busy = false);
                         }
                       },
-                icon: const Icon(Icons.qr_code),
-                label: const Text('手表扫码登录（二维码）'),
+                icon: const Icon(Icons.pin),
+                label: const Text('手表配对码（6位数字）'),
               ),
-              if (_qrPayload != null) ...[
+              if (_pairCode != null) ...[
                 const SizedBox(height: 8),
                 GestureDetector(
-                  onTap: () => setState(() => _qrPayload = null),
+                  onTap: () => setState(() => _pairCode = null),
                   child: Center(
-                    child: Container(
-                      color: Colors.white,
-                      padding: const EdgeInsets.all(8),
-                      child: QrImageView(
-                        data: _qrPayload!,
-                        size: 200,
+                    child: Text(
+                      _pairCode!,
+                      style: const TextStyle(
+                        fontSize: 48,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 12,
                       ),
                     ),
                   ),

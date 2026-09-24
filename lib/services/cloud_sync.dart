@@ -184,6 +184,8 @@ class CloudSync {
   }
 
   /// 手表扫到上面的串 → 同一账号直接登录，不用输密码。
+  /// gotrue setSession(refresh) 只用 refresh 走 /token 刷新拿新 access，
+  /// 二维码里拼 access 是为了将来直接恢复、少一次网络（现在先走刷新链路）。
   static Future<String?> signInWithQrPayload(String payload) async {
     try {
       final raw = utf8.decode(base64Url.decode(payload.trim()));
@@ -192,7 +194,62 @@ class CloudSync {
       final access = raw.substring(0, i);
       final refresh = raw.substring(i + 1);
       if (access.isEmpty || refresh.isEmpty) return '二维码不对，重新扫一下';
-      final r = await _c.auth.setSession(refresh, accessToken: access);
+      final r = await _c.auth.setSession(refresh);
+      final s = r.session;
+      if (s != null) await _saveSessionTokens(s);
+      return null;
+    } on AuthException catch (e) {
+      return e.message;
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  // ---------------- 配对码登录（手表无摄像头，用 6 位数字代替扫码） ----------------
+  //
+  // 手机已登录 → createPairingCode() 生成 6 位码（5 分钟有效，一次即焚）；
+  // 手表输入 6 位码 → redeemPairingCode() 取回同一会话的 token 直接登录。
+  // 需在 Supabase 后台执行 supabase_pairing.sql（表 + 两个函数）一次。
+
+  static String _newPairCode() {
+    final r = DateTime.now().microsecondsSinceEpoch % 1000000;
+    return r.toString().padLeft(6, '0');
+  }
+
+  /// 手机侧：把当前会话 token 存到云端配对码，返回 6 位码（失败返回 null）。
+  static Future<String?> createPairingCode() async {
+    try {
+      if (!_ready || !loggedIn) return null;
+      final s = _c.auth.currentSession;
+      if (s == null || (s.refreshToken ?? '').isEmpty) return null;
+      await _saveSessionTokens(s);
+      final code = _newPairCode();
+      await _c.rpc('create_pairing_code', params: {
+        'p_code': code,
+        'p_access': s.accessToken,
+        'p_refresh': s.refreshToken ?? '',
+      });
+      return code;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 手表侧：输入 6 位码 → 同一账号直接登录（一次即焚，5 分钟过期）。
+  /// 返回 null 成功，非 null 是失败原因。
+  static Future<String?> redeemPairingCode(String code) async {
+    if (!_ready) return '本机还没填项目 URL+key，先完成第 1 步';
+    try {
+      final c = code.trim();
+      if (c.length != 6) return '配对码是 6 位数字';
+      final rows = await _c.rpc('redeem_pairing_code', params: {'p_code': c});
+      final list = (rows as List?) ?? const [];
+      if (list.isEmpty) return '码不对或已过期，手机上重新生成一个';
+      final m = Map<String, dynamic>.from(list.first as Map);
+      final access = '${m['access'] ?? ''}';
+      final refresh = '${m['refresh'] ?? ''}';
+      if (access.isEmpty || refresh.isEmpty) return '码已失效，重新生成一个';
+      final r = await _c.auth.setSession(refresh);
       final s = r.session;
       if (s != null) await _saveSessionTokens(s);
       return null;
