@@ -23,6 +23,17 @@ class CloudSync {
   static bool _ready = false;
   static bool get isReady => _ready;
 
+  /// 编译时内置的项目信息（CI 从 Secrets 经 --dart-define 注入，不进仓库）：
+  /// 手机/手表装包即带连接信息，用户只输账号密码（或手表输 6 位配对码），
+  /// 再也不用在手表上敲 URL/key。本地没配过时自动用内置值初始化。
+  /// 本地手动填的优先（可切换项目/换 key）。
+  static const _builtInUrl =
+      String.fromEnvironment('SUPABASE_URL', defaultValue: '');
+  static const _builtInAnon =
+      String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
+  static bool get hasBuiltIn =>
+      _builtInUrl.isNotEmpty && _builtInAnon.isNotEmpty;
+
   static const _kUrl = 'cloud_url';
   static const _kAnon = 'cloud_anon';
   static const _store = FlutterSecureStorage();
@@ -49,17 +60,29 @@ class CloudSync {
   }
 
   /// 启动时调：本机有存过的 url+key 才初始化（没配过就是纯本机模式，不报错）
+  /// 包里带了内置项目信息（CI --dart-define 注入）时自动用它初始化，
+  /// 手机/手表装完就能登录，不用敲 URL/key。
   static Future<bool> initFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final url = prefs.getString(_kUrl);
-      final anon = await _store.read(key: _kAnon);
+      var url = prefs.getString(_kUrl);
+      var anon = await _store.read(key: _kAnon);
+      if ((url == null || url.isEmpty || anon == null || anon.isEmpty) &&
+          hasBuiltIn) {
+        url = _builtInUrl;
+        anon = _builtInAnon;
+      }
       if (url == null || url.isEmpty || anon == null || anon.isEmpty) {
         return false;
       }
       await Supabase.initialize(url: url, publishableKey: anon);
       
       _ready = true;
+      if (prefs.getString(_kUrl) == null && hasBuiltIn) {
+        // 内置值首刷：存一份到本机，后面换 key/切项目走手动覆盖
+        await prefs.setString(_kUrl, url);
+        await _store.write(key: _kAnon, value: anon);
+      }
       return true;
     } catch (_) {
       _ready = false;

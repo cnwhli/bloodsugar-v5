@@ -6,6 +6,7 @@ import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
 import '../../services/bg_sync.dart';
+import '../../services/glucodata_forward.dart';
 import '../../services/health_bridge.dart';
 import '../../services/phone_widget.dart';
 import 'cgm_foreground_service.dart';
@@ -85,6 +86,13 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       if (!inserted) return; // 重复广播：UI 已有，后续推送/报警跳过
       // 系统健康平台同步（OPPO Watch X 官方血糖表盘只能从这里读数）
       HealthBridge.writeGlucose(reading.valueMmolL, reading.timestamp);
+      // GlucoData 标准广播转发（第三方表盘/车机/Tasker 可订阅读数）
+      GlucoDataForward.push(
+        mmolL: reading.valueMmolL,
+        rateMgDlMin: 0,
+        time: reading.timestamp,
+        sensorId: reading.sensorId ?? '',
+      );
       // 悬浮窗同步最新值（含时间）
       GlucoseOverlay.push(reading.valueMmolL, reading.trend,
           _fmtTime(reading.timestamp));

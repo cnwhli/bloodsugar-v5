@@ -73,44 +73,53 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
               style: TextStyle(color: Colors.grey)),
           const SizedBox(height: 12),
           if (!_ready) ...[
-            const Text('第 1 步：填 Supabase 项目（只填一次，存本机）',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _urlCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Project URL',
-                hintText: 'https://xxx.supabase.co',
-                border: OutlineInputBorder(),
+            // 包自带项目连接信息时跳过此步，直接登录（手表再也不用敲 URL/key）。
+            if (!CloudSync.hasBuiltIn) ...[
+              const Text('第 1 步：填 Supabase 项目（只填一次，存本机）',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _urlCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Project URL',
+                  hintText: 'https://xxx.supabase.co',
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _keyCtrl,
-              decoration: const InputDecoration(
-                labelText: 'anon public key',
-                hintText: 'Settings → API → anon public',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _keyCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'anon public key',
+                  hintText: 'Settings → API → anon public',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 3,
               ),
-              maxLines: 3,
-            ),
-            const SizedBox(height: 8),
-            FilledButton(
-              onPressed: _busy
-                  ? null
-                  : () => _run(
-                        () async {
-                          final ok = await CloudSync.configure(
-                              _urlCtrl.text, _keyCtrl.text);
-                          if (mounted && ok) {
-                            setState(() => _ready = true);
-                          }
-                          return ok ? '连接成功，登录账号即可同步' : '连接失败：检查URL/key/网络';
-                        },
-                        '连接成功',
-                      ),
-              child: const Text('连接'),
-            ),
+              const SizedBox(height: 8),
+              FilledButton(
+                onPressed: _busy
+                    ? null
+                    : () => _run(
+                          () async {
+                            final ok = await CloudSync.configure(
+                                _urlCtrl.text, _keyCtrl.text);
+                            if (mounted && ok) {
+                              setState(() => _ready = true);
+                            }
+                            return ok ? '连接成功，登录账号即可同步' : '连接失败：检查URL/key/网络';
+                          },
+                          '连接成功',
+                        ),
+                child: const Text('连接'),
+              ),
+            ] else
+              const Card(
+                child: ListTile(
+                  leading: Icon(Icons.check_circle, color: Colors.green),
+                  title: Text('项目已内置，登录账号即可同步'),
+                ),
+              ),
           ] else ...[
             Card(
               child: ListTile(

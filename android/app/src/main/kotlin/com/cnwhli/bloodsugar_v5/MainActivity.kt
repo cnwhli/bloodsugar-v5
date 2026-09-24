@@ -1,6 +1,7 @@
 package com.cnwhli.bloodsugar_v5
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -64,6 +65,51 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun registerSensorChannels(engine: FlutterEngine) {
+        // GlucoData 标准广播转发（pachi81/GlucoDataHandler 协议，MIT）：
+        // action=glucodata.Minute，第三方表盘/车机/Tasker/xDrip+ 可订阅读数。
+        MethodChannel(
+            engine.dartExecutor.binaryMessenger, "bloodsugar/glucodata"
+        ).setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
+            if (call.method == "broadcast") {
+                try {
+                    val i = Intent("glucodata.Minute")
+                    i.putExtra(
+                        "glucodata.Minute.mgdl",
+                        (call.argument<Int>("mgdl") ?: 0),
+                    )
+                    i.putExtra(
+                        "glucodata.Minute.glucose",
+                        (call.argument<Number>("glucose")?.toFloat() ?: 0f),
+                    )
+                    i.putExtra(
+                        "glucodata.Minute.Rate",
+                        (call.argument<Number>("rate")?.toFloat() ?: 0f),
+                    )
+                    i.putExtra(
+                        "glucodata.Minute.Time",
+                        (call.argument<Number>("time")?.toLong() ?: 0L),
+                    )
+                    i.putExtra(
+                        "glucodata.Minute.SerialNumber",
+                        call.argument<String>("serial") ?: "",
+                    )
+                    i.putExtra(
+                        "glucodata.Minute.Delta",
+                        (call.argument<Number>("delta")?.toFloat() ?: 0f),
+                    )
+                    i.putExtra(
+                        "glucodata.Minute.Alarm",
+                        (call.argument<Int>("alarm") ?: 0),
+                    )
+                    sendBroadcast(i)
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.error("BROADCAST_FAIL", e.message, null)
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
         // 方法通道：一次读最新值 / 查传感器有没有
         MethodChannel(
             engine.dartExecutor.binaryMessenger, "watch_sensors/methods"

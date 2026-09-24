@@ -223,6 +223,46 @@ const Map<int, int> trendMap = {
 ///   glucose:10/warmup:1/unknown:4/valid:1 u16, quality u8} +
 /// prev[2] + reserved + crc32 + 完整设备名
 /// 例：glucose=119 → 119 mg/dL，trend=-5（×0.1 = -0.5 mg/dL/min）
+// ---- AiDEX 广播 CRC 校验（Juggluco aidexx/crc.cpp + glucose.h，原样移植）----
+// crc32_normal：多项式 0x04C11DB7，高位先行，初值 = mkseed()。
+int _crc32Normal(List<int> buf, int len, int crc) {
+  var c = crc & 0xFFFFFFFF;
+  var i = 0;
+  while (len-- > 0) {
+    c ^= (buf[i++] & 0xFF) << 24;
+    for (var b = 0; b < 8; b++) {
+      if ((c & 0x80000000) != 0) {
+        c = ((c << 1) ^ 0x04C11DB7) & 0xFFFFFFFF;
+      } else {
+        c = (c << 1) & 0xFFFFFFFF;
+      }
+    }
+  }
+  return c;
+}
+
+/// seed = 16 字节载荷内 4 个 LE32 之和 % 0x7FA777（Juggluco glucose.h mkseed）。
+int _mkSeed(List<int> mfg) {
+  int w(int off) =>
+      (mfg[off] & 0xFF) |
+      ((mfg[off + 1] & 0xFF) << 8) |
+      ((mfg[off + 2] & 0xFF) << 16) |
+      ((mfg[off + 3] & 0xFF) << 24);
+  return (w(0) + w(4) + w(8) + w(12)) % 0x7FA777;
+}
+
+/// 验包：mfg[0..15]（LastPast + prev[2] + reserved）算 CRC，与 mfg[16..19]
+/// 的 crc32 字段比对。长度不够 20 字节时（某些系统截断）放行，保兼容。
+bool _goodCrc(List<int> mfg) {
+  if (mfg.length < 20) return true;
+  final calc = _crc32Normal(mfg, 0x10, _mkSeed(mfg));
+  final want = (mfg[16] & 0xFF) |
+      ((mfg[17] & 0xFF) << 8) |
+      ((mfg[18] & 0xFF) << 16) |
+      ((mfg[19] & 0xFF) << 24);
+  return calc == want;
+}
+
 class AidexProtocol extends CgmProtocol {
   @override
   CgmBrand get brand => CgmBrand.aidexX;
@@ -256,6 +296,9 @@ class AidexProtocol extends CgmProtocol {
   Future<List<GlucoseReading>> parseAdvertisementAll(ScanResult r) async {
     final mfg = r.advertisementData.manufacturerData[0x0059];
     if (mfg == null || mfg.length < 15) return const [];
+    // 坏包直接扔：CRC 不对的整包丢弃，不进库不污染曲线
+    // （Juggluco glucose.h goodcrc()；系统截断不足 20 字节时放行保兼容）。
+    if (!_goodCrc(mfg)) return const [];
     // 发射器身份 = 广播名后6位配对码（如 AiDEX x-22222FJV7J → 22FJV7J…
     // 取后6位与发射器贴纸/配对码一致）。换发射器后 minFromStart 从 0 重计，
     // 去重必须按（序号, 发射器）联合判，否则旧唯一索引把新发射器的点全吞掉。
