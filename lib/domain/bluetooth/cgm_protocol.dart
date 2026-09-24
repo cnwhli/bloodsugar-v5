@@ -29,7 +29,9 @@
 /// - Medtronic：私有协议无公开实现，仅占位
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../data/datasource/local_db.dart';
@@ -904,18 +906,38 @@ class BleCgmManager {
   /// 权限 + 蓝牙就绪检查（startScan 与 startLowPowerWatch 共用）
   /// 返回 null = 就绪；返回字符串 = 失败原因（已写日志）
   Future<String?> _ensureReady() async {
-    // 1. 权限：Android 12+ 要 BLUETOOTH_SCAN/CONNECT，老版本要定位
+    // 0. 先报环境：安卓版本决定走哪套权限（12+走SCAN/CONNECT，11及以下
+    // 靠定位+BLUETOOTH/BLUETOOTH_ADMIN）。日志里一眼看出权限模型对不对。
+    var sdk = 0;
+    if (Platform.isAndroid) {
+      try {
+        sdk = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+      } catch (_) {}
+    }
+    _log('环境：Android SDK $sdk');
+    // 1. 权限：Android 12+(SDK31+)要 BLUETOOTH_SCAN/CONNECT；
+    // Android 11 及以下（OPPO Watch X 就是 SDK30）走定位 + 旧蓝牙权限，
+    // SCAN/CONNECT 申请了也白给——必须看定位批没批。
     final scan = await Permission.bluetoothScan.request();
     final connect = await Permission.bluetoothConnect.request();
     final location = await Permission.locationWhenInUse.request();
-    if (!scan.isGranted || !connect.isGranted) {
-      const msg = '缺少蓝牙权限：请在系统设置 → 应用 → 血糖管家 → 权限中允许"附近的设备"';
-      _log(msg);
-      _setState(BleCgmState.error);
-      return msg;
-    }
-    if (!location.isGranted) {
-      _log('提醒：未授予定位权限，Android 11 及以下可能扫不到 BLE 设备');
+    final locAlways = await Permission.location.status;
+    _log('权限：SCAN=${scan.name} CONNECT=${connect.name} 定位=${location.name}(当前${locAlways.name})');
+    if (sdk >= 31) {
+      if (!scan.isGranted || !connect.isGranted) {
+        const msg = '缺少蓝牙权限：请在系统设置 → 应用 → 血糖管家 → 权限中允许"附近的设备"';
+        _log(msg);
+        _setState(BleCgmState.error);
+        return msg;
+      }
+    } else {
+      // SDK30 及以下：定位是 BLE 扫描的命门，不批就直接报错，别往下走
+      if (!location.isGranted) {
+        const msg = '定位权限被拒：安卓11及以下扫BLE必须开定位（系统设置→应用→血糖管家→权限→位置→允许）';
+        _log(msg);
+        _setState(BleCgmState.error);
+        return msg;
+      }
     }
     // 通知权限（前台服务常驻通知用，不强制）
     await Permission.notification.request();
