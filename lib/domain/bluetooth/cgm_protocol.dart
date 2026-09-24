@@ -788,6 +788,11 @@ class BleCgmManager {
   /// 比 continuousScan 省电一个数量级，和发射器 cadence 对齐不漏数。
   Timer? _lowPowerTimer;
   bool _lowPowerRunning = false;
+  // 本轮扫描计数：每次 burst 置零，有任何广播进 _attachListener 就 +1。
+  // 22 秒后还为 0 = 手表射频真没收到东西（不是解析问题），打一条明确日志，
+  // 否则用户只看到"监听中"干等，不知道是没扫到还是扫到没解出来。
+  int _burstSeen = 0;
+  bool _burstActive = false;
 
   /// checkPermission=false：给后台 isolate 用——后台弹不出授权框，
   /// request() 会直接返回 denied 导致后台扫不到，必须跳过（前台点扫描时已授过权）。
@@ -810,12 +815,23 @@ class BleCgmManager {
   Future<void> _lowPowerBurst() async {
     if (!_lowPowerRunning) return;
     _attachListener();
+    _burstSeen = 0;
+    _burstActive = true;
+    _log('开始一轮扫描…');
     try {
       await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 15),
-        androidScanMode: AndroidScanMode.lowPower,
+        timeout: const Duration(seconds: 20),
+        androidScanMode: AndroidScanMode.balanced,
       );
     } catch (_) {}
+    await Future.delayed(const Duration(seconds: 22));
+    if (!_burstActive) return;
+    _burstActive = false;
+    if (_burstSeen == 0) {
+      _log('本轮扫到 0 个蓝牙设备：手表射频没收到任何广播（远/被手机抢连/手表位置权限受限都可能，先把手机蓝牙关了只留手表再扫一轮）');
+    } else {
+      _log('本轮扫到 $_burstSeen 个蓝牙设备');
+    }
   }
 
   Future<void> stopLowPowerWatch() async {
@@ -833,6 +849,7 @@ class BleCgmManager {
   void _attachListener() {
     _scanSub ??= FlutterBluePlus.scanResults.listen((results) {
       for (final r in results) {
+        _burstSeen++; // 任何广播都计数：区分"没扫到"和"扫到没解出"
         final id = r.device.remoteId.toString();
         final advName = r.advertisementData.advName;
         if (_seen.add(id)) {
