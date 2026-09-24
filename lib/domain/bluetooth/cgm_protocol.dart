@@ -36,6 +36,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../data/datasource/local_db.dart';
 import 'libre2_crypto.dart';
+import 'sibionics_crypto.dart';
 
 // 128-bit 展开：16-bit UUID -> 标准 base UUID
 String _u16(String hex) =>
@@ -561,8 +562,12 @@ class DexcomG7Protocol extends DexcomG6Protocol {
 /// 设备名形如 AAC25B18AAFZ（序列号尾 6 位匹配），握手由 gs3Glucose native 驱动。
 class SibionicsProtocol extends CgmProtocol {
   static const svc = '00005347-0000-1000-8000-00805f9b34fb';
+  static const ff30 = '0000ff30-0000-1000-8000-00805f9b34fb';
   static const notifyChr = '0000ff31-0000-1000-8000-00805f9b34fb';
   static const writeChr = '0000ff32-0000-1000-8000-00805f9b34fb';
+
+  /// GS3 账号 ID（bindUser 用，用户从官方 App 取后填设置；null = 走 GS1 免账号流程）
+  static int? accountId;
 
   @override
   CgmBrand get brand => CgmBrand.sibionics;
@@ -588,9 +593,100 @@ class SibionicsProtocol extends CgmProtocol {
     void Function(GlucoseReading) onReading,
     void Function(String) log,
   ) async {
-    // 硅基是连接型：这里先只做发现日志，不建连（避免和 AiDEX 广播抢设备）。
-    // 真机联调补完 FF32 握手/FF31 解析后再建连。
-    log('发现硅基设备 ${device.platformName}（握手待真机联调，暂不连接）');
+    // 硅基是连接型（Juggluco Si3GattCallback 流程）：
+    // 连 → MTU 247 → 发现服务 → 订阅 FF31 → 写 26B 认证包 →
+    // FF31 notify 经 sibDispatch 分发：glucose 直接出数，ack 按状态机回包。
+    // GS3 账号 ID（bindUser 用）：SibionicsProtocol.accountId，未填则
+    // 先走 GS1 流程（免账号），收到 Wrong account 再提示用户填。
+    try {
+      log('连接硅基 ${device.platformName}…');
+      await device.connect(autoConnect: false);
+      try {
+        await device.requestMtu(247);
+      } catch (_) {}
+      await device.discoverServices();
+      BluetoothCharacteristic? ff31;
+      BluetoothCharacteristic? ff32;
+      for (final s in device.servicesList) {
+        final su = s.uuid.toString().toLowerCase();
+        if (su == svc || su == ff30) {
+          for (final c in s.characteristics) {
+            final cu = c.uuid.toString().toLowerCase();
+            if (cu == notifyChr) ff31 = c;
+            if (cu == writeChr) ff32 = c;
+          }
+        }
+      }
+      if (ff31 == null || ff32 == null) {
+        log('硅基握手失败：没找到 FF31/FF32');
+        try {
+          await device.disconnect();
+        } catch (_) {}
+        return;
+      }
+      final w = ff32;
+      await ff31.setNotifyValue(true);
+      log('已订阅 FF31，写认证包…');
+      // 认证包需 RC4 加密后写出
+      final mac = device.remoteId.toString();
+      final authPlain = sibAuthPacket(mac);
+      await w.write(sibRc4(authPlain), withoutResponse: true);
+      var lastIndex = 0;
+      var bound = false;
+      ff31.onValueReceived.listen((data) async {
+        final d = sibDispatch(data);
+        final action = d['action'];
+        if (action == 'glucose') {
+          final pts = (d['points'] as List).cast<Map<String, int>>();
+          for (final p in pts) {
+            if (p['index']! > lastIndex) lastIndex = p['index']!;
+            onReading(GlucoseReading(
+              valueMgDl: p['mgDl']!.toDouble(),
+              timestamp: DateTime.fromMillisecondsSinceEpoch(
+                  p['timeSec']! * 1000),
+              trend: p['trend']!,
+              brand: brand,
+              minFromStart: p['index'],
+            ));
+          }
+          // 要下一批：nextid = lastIndex + 1
+          try {
+            final ask = sibAskDataPacket(lastIndex + 1,
+                magic: d['ver'] == 0x10 ? 0x0806 : 0x1406);
+            await w.write(sibRc4(ask), withoutResponse: true);
+          } catch (_) {}
+        } else if (action == 'ack') {
+          final raw = (d['raw'] as List).cast<int>();
+          // result==2 → Wrong account ID（GS3 账号不对），提示用户填账号
+          if (raw.length >= 6 && raw[5] == 2 && !bound) {
+            log('硅基 GS3：账号 ID 不对，请在设置里填 GS3 账号 ID 后重连');
+            return;
+          }
+          // 握手推进：先时间同步，再要数据（GS1 免账号流程；GS3 有账号则 bindUser）
+          try {
+            final acct = SibionicsProtocol.accountId;
+            if (acct != null && !bound) {
+              bound = true;
+              await w.write(
+                  sibRc4(sibBindUserPacket(acct, seq: 1)),
+                  withoutResponse: true);
+            } else {
+              await w.write(sibRc4(sibTimeSyncPacket()),
+                  withoutResponse: true);
+              await Future.delayed(const Duration(milliseconds: 300));
+              final ask = sibAskDataPacket(lastIndex + 1, magic: 0x0806);
+              await w.write(sibRc4(ask), withoutResponse: true);
+            }
+          } catch (_) {}
+        }
+      });
+      log('硅基握手已发，等待 FF31 回包…（日志会显示 glucose/ack）');
+    } catch (e) {
+      log('硅基连接异常：$e');
+      try {
+        await device.disconnect();
+      } catch (_) {}
+    }
   }
 }
 
