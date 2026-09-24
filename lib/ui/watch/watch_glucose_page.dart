@@ -54,6 +54,8 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   int? _steps;
   int? _workoutMin;
   Timer? _sportTimer;
+  // Health Connect 状态：null=未检测，true=可用，false=没装/不可用
+  bool? _hcOk;
 
   // ---- 分页 + 历史 ----
   final _pager = PageController();
@@ -148,8 +150,13 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     }
   }
 
-  /// 心率/步数/运动时长（三件套，失败就留空显示 --）
+  /// 心率/步数/运动时长（三件套，失败就留空显示 --）。
+  /// 先查 Health Connect 装没装：没装直接标不可用，不让用户干等 --。
   Future<void> _loadSport() async {
+    final ok = await HealthBridge.isAvailable();
+    if (!mounted) return;
+    setState(() => _hcOk = ok);
+    if (!ok) return; // 没装：三件套留 --，点一下跳安装
     final r = await HealthBridge.readSportToday();
     if (!mounted) return;
     setState(() {
@@ -313,6 +320,21 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     return '$hh:$mm';
   }
 
+  /// 手表抬腕看的日期时间：9月24日 周三 15:40
+  String _fmtDateTime(DateTime ts) {
+    const week = ['一', '二', '三', '四', '五', '六', '日'];
+    final w = week[(ts.weekday - 1).clamp(0, 6)];
+    return '${ts.month}月${ts.day}日 周$w ${_fmtHM(ts)}';
+  }
+
+  /// 没装 Health Connect：跳应用商店安装页，回来后重刷
+  Future<void> _goInstallHealth() async {
+    await HealthBridge.installPrompt();
+    if (!mounted) return;
+    HapticFeedback.lightImpact();
+    await _loadSport();
+  }
+
   @override
   Widget build(BuildContext context) {
     final statusColor = _lowAlert
@@ -455,6 +477,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
               fontSize: small + 4, color: statusColor),
         ),
         const SizedBox(height: 2),
+        // 日期时间（手表抬腕先看今天几号几点，不用退回表盘）
+        Text(
+          _fmtDateTime(DateTime.now()),
+          style: TextStyle(fontSize: small, color: Colors.grey),
+        ),
+        const SizedBox(height: 2),
         Text(
           _hasData
               ? '$_brand · ${_fmtTime(_updatedAt)}'
@@ -463,17 +491,29 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
         const SizedBox(height: 6),
-        // 运动三件套：心率 / 步数 / 运动分钟（读不到显示 --，不断层）
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _sportItem('❤', _bpm == null ? '--' : '$_bpm',
-                'bpm', small),
-            _sportItem('👣', _fmtSteps(_steps), '步', small),
-            _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
-                '分钟', small),
-          ],
+        // 运动三件套：心率 / 步数 / 运动分钟（读不到显示 --，不断层）。
+        // 没装 Health Connect 时点一下跳安装页（国产手表常没预装）。
+        GestureDetector(
+          onTap: _hcOk == false ? _goInstallHealth : null,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _sportItem('❤', _bpm == null ? '--' : '$_bpm',
+                  'bpm', small),
+              _sportItem('👣', _fmtSteps(_steps), '步', small),
+              _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
+                  '分钟', small),
+            ],
+          ),
         ),
+        if (_hcOk == false)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              '点运动区安装 Health Connect 后自动同步',
+              style: TextStyle(fontSize: small - 1, color: Colors.orange),
+            ),
+          ),
         const SizedBox(height: 10),
         // 手表独立监听大按钮（≥48px，小屏一定点得到）
         SizedBox(

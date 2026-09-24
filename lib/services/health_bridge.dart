@@ -53,9 +53,44 @@ class HealthSnapshot {
 class HealthBridge {
   static final _health = Health();
   static bool _authed = false;
+  static bool _configured = false;
+
+  /// health 插件强制要求：任何读写之前先 configure()（取设备 ID 决定走
+  /// Health Connect 还是 HealthKit）。之前没调，授权/读数在部分机器上
+  /// 静默失败——运动页全 `--` 的直接病根。
+  static Future<void> _ensureConfigured() async {
+    if (_configured) return;
+    try {
+      await _health.configure();
+    } catch (_) {}
+    _configured = true;
+  }
+
+  /// Health Connect 装没装（国产 ROM 常没有，装了才有数可读）。
+  /// 返回 true=可用；false=没装或不可用，上层提示去装。
+  static Future<bool> isAvailable() async {
+    try {
+      await _ensureConfigured();
+      return await _health.isHealthConnectAvailable();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 没装 Health Connect 时跳应用商店安装页
+  static Future<void> installPrompt() async {
+    try {
+      await _health.installHealthConnect();
+    } catch (_) {}
+  }
 
   /// 首次调用时弹系统授权框（Health Connect），用户点允许即可
   static Future<bool> ensureAuth() async {
+    try {
+      await _ensureConfigured();
+    } catch (_) {
+      return false;
+    }
     if (_authed) return true;
     try {
       final types = [HealthDataType.BLOOD_GLUCOSE];
@@ -73,6 +108,11 @@ class HealthBridge {
   /// 和血糖分开要：只装手机的人不会被多弹框）
   static bool _sportAuthed = false;
   static Future<bool> ensureSportAuth() async {
+    try {
+      await _ensureConfigured();
+    } catch (_) {
+      return false;
+    }
     if (_sportAuthed) return true;
     try {
       final types = [

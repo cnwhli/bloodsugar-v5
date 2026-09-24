@@ -59,6 +59,11 @@ class _TreatmentLogScreenState extends State<TreatmentLogScreen>
 
   /// 今日系统平台数据（有手表/手环自动带出来，点一下转成一条运动记录）
   Future<void> _loadSnapshot() async {
+    if (!await HealthBridge.isAvailable()) {
+      if (!mounted) return;
+      setState(() => _snapLoading = false); // 没装：直接显示提示，不转菊花
+      return;
+    }
     final s = await HealthBridge.readTodaySnapshot();
     if (!mounted) return;
     setState(() {

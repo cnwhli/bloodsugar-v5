@@ -7,6 +7,23 @@
     <!-- 定位：Android 6~11 BLE 扫描必需 -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 运动/身体数据：Health Connect（手表+手机的心率/步数/睡眠/血氧/血压/运动） -->
+    <!-- 注意：health 插件自带空 manifest 合并不进权限，必须在 App 侧声明 -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_BLOOD_GLUCOSE" />
+    <uses-permission android:name="android.permission.health.WRITE_BLOOD_GLUCOSE" />
+    <uses-permission android:name="android.permission.health.READ_BLOOD_PRESSURE" />
+    <uses-permission android:name="android.permission.health.READ_OXYGEN_SATURATION" />
+    <uses-permission android:name="android.permission.health.READ_WEIGHT" />
     <!-- 震动：超阈值报警 -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 声音：audioplayers 需网络播放在线提示音时用 -->
@@ -84,5 +101,7 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Health Connect 检测用：查是否安装了 com.google.android.apps.healthdata -->
+        <package android:name="com.google.android.apps.healthdata" />
     </queries>
 </manifest>

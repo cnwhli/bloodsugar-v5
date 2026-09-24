@@ -30,6 +30,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // 健康快照（首页健康卡片：自动同步优先，手动补兜底）
   HealthSnapshot _snap = const HealthSnapshot();
   List<Map<String, dynamic>> _todayLogs = [];
+  // Health Connect 状态：null=未检测，false=没装（芯片点一下跳安装）
+  bool? _hcOk;
 
   @override
   void initState() {
@@ -83,17 +85,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (mounted) setState(() => _stats = stats);
     // 健康快照 + 今日记录（首页健康卡片用；失败留空显示 --，不挡血糖）
     try {
-      final snap = await HealthBridge.readTodaySnapshot();
-      final logs = await AppDatabase.instance.todayTreatments();
-      if (mounted) {
-        setState(() {
-          _snap = snap;
-          _todayLogs = logs;
-        });
-        // 自动同步进 vitals 表（换手机/云同步时有底；每天一条快照，去重靠 kind+date）
-        _cacheSnapshot(snap);
-        // 自动同步失败的项，用今天手动补的数兜底（source=manual，不冒充自动）
-        _fillFromManual();
+      final hcOk = await HealthBridge.isAvailable();
+      if (mounted) setState(() => _hcOk = hcOk);
+      if (!hcOk) {
+        // 没装 Health Connect：芯片留 --，点一下跳安装（国产手机常没预装）
+        if (mounted) {
+          final logs = await AppDatabase.instance.todayTreatments();
+          if (mounted) setState(() => _todayLogs = logs);
+        }
+      } else {
+        final snap = await HealthBridge.readTodaySnapshot();
+        final logs = await AppDatabase.instance.todayTreatments();
+        if (mounted) {
+          setState(() {
+            _snap = snap;
+            _todayLogs = logs;
+          });
+          // 自动同步进 vitals 表（换手机/云同步时有底；每天一条快照，去重靠 kind+date）
+          _cacheSnapshot(snap);
+          // 自动同步失败的项，用今天手动补的数兜底（source=manual，不冒充自动）
+          _fillFromManual();
+        }
       }
     } catch (_) {}
   }
@@ -544,6 +556,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const Text('手表/手环戴上自动同步；没戴就点一下芯片手填',
                           style:
                               TextStyle(fontSize: 11, color: Colors.grey)),
+                      if (_hcOk == false)
+                        GestureDetector(
+                          onTap: () async {
+                            await HealthBridge.installPrompt();
+                            if (mounted) _loadLatest();
+                          },
+                          child: const Padding(
+                            padding: EdgeInsets.only(top: 4),
+                            child: Text(
+                              '⚠️ 未装 Health Connect，点这里安装后自动同步（国产手机常没预装）',
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.orange),
+                            ),
+                          ),
+                        ),
                       const SizedBox(height: 4),
                       Wrap(
                         spacing: 8,
