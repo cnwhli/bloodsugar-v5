@@ -47,6 +47,25 @@ class NightscoutSync {
     await p.remove(_kSecret);
   }
 
+  /// 连通测试：GET /api/v1/status?token=，200 即通（密码错/地址错直接报）。
+  static Future<String?> testConnection() async {
+    try {
+      final (base, secret) = await load();
+      if (base.isEmpty || secret.isEmpty) return '先填地址和密码';
+      final token = sha1.convert(secret.codeUnits).toString();
+      final uri = Uri.parse('$base/api/v1/status?token=$token');
+      final resp =
+          await http.get(uri).timeout(const Duration(seconds: 15));
+      if (resp.statusCode == 200) return null;
+      if (resp.statusCode == 401) return '密码不对（API_SECRET 错）';
+      return '连不上：HTTP ${resp.statusCode}，检查地址';
+    } on SocketException {
+      return '连不上：检查地址/网络';
+    } catch (e) {
+      return '$e';
+    }
+  }
+
   /// 推一条血糖。mgDl 整数，time  UTC 时间，device 固定 'bloodsugar-v5'。
   /// 失败静默返回 false（调用方不用管）。
   static Future<bool> push({

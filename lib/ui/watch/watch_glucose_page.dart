@@ -59,6 +59,9 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   int? _workoutMin;
   Timer? _sportTimer;
   StreamSubscription? _hrSub; // 心率实时流订阅（dispose 随 _subs 一起取消）
+  Timer? _linkWatchdog; // 断链看门狗：5 分钟无新数 → 震动提醒 + 自动重扫
+  DateTime _lastDataAt = DateTime.now();
+  bool _linkLostBuzzed = false;
 
   // ---- 分页 + 历史 ----
   final _pager = PageController();
@@ -88,8 +91,29 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     // 运动数据 5 分钟刷一次（抬腕看的是缓存值，不转菊花）
     _sportTimer = Timer.periodic(
         const Duration(minutes: 5), (_) => _loadSport());
-    // 实时订阅：新数进来表盘自动刷
-    _subs.add(_manager.readingStream.listen((r) {
+    // 实时订阅：新数进来表盘自动刷 + 推云（手表连发射器手机秒级看到）
+    _subs.add(_manager.readingStream.listen((r) async {
+      if (!mounted) return;
+      _lastDataAt = DateTime.now(); // 看门狗喂食：有数=链路活着
+      _linkLostBuzzed = false;
+      // 先推云再刷 UI：手表直连时手机秒级看到，不用手动点同步
+      try {
+        if (CloudSync.isReady && CloudSync.loggedIn) {
+          await AppDatabase.init();
+          final id =
+              await AppDatabase.instance.latestReadingId(r);
+          await CloudSync.pushReading(
+            localId: id,
+            mmolL: r.valueMmolL,
+            trend: r.trend,
+            brand: r.brandLabel,
+            source: 'ble',
+            seq: r.minFromStart,
+            sensorId: r.sensorId,
+            measuredAt: r.timestamp,
+          );
+        }
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _mmolL = r.valueMmolL;
@@ -130,12 +154,42 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       } catch (_) {}
     }));
     setState(() => _scanState = _manager.state.toString().split('.').last);
+    // 断链看门狗：每分钟查一次，5 分钟没新数 → 长震提醒 + 自动重连。
+    // 灭屏被杀后开屏进来就能发现，不用用户猜“是不是断了”。
+    _linkWatchdog =
+        Timer.periodic(const Duration(minutes: 1), (_) => _checkLink());
+  }
+
+  /// 断链检查：监听开着但 5 分钟没数 → 震动 + 自动重扫一次。
+  Future<void> _checkLink() async {
+    if (!mounted || !_lowPowerOn) return;
+    if (DateTime.now().difference(_lastDataAt).inMinutes < 5) return;
+    if (_linkLostBuzzed) return; // 提醒过就不再震，等下一次有数复位
+    _linkLostBuzzed = true;
+    try {
+      // 三长震：断链提醒（和低血糖三短震区分：间隔 700ms）
+      for (var i = 0; i < 3; i++) {
+        HapticFeedback.heavyImpact();
+        await Future.delayed(const Duration(milliseconds: 700));
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _scanState = '断链重连中…');
+    try {
+      await _manager.disconnect();
+      final err = await _manager.startScan();
+      if (!mounted) return;
+      setState(
+          () => _scanState = err ?? _manager.state.toString().split('.').last);
+      if (err == null) _lastDataAt = DateTime.now(); // 重连计时重来
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _sportTimer?.cancel();
+    _linkWatchdog?.cancel();
     _pager.dispose();
     for (final s in _subs) {
       s.cancel();

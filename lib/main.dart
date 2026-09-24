@@ -31,6 +31,14 @@ void main() async {
   try {
     await CloudSync.initFromStorage();
   } catch (_) {}
+  // 启动即订阅 Realtime + 补洞：App 一开就实时同步，不用手动点同步。
+  // 已登录才有效；未登录直接跳过（登录成功后各登录入口会再调一次）。
+  try {
+    if (CloudSync.isReady && CloudSync.loggedIn) {
+      await CloudSync.syncAll();
+      await CloudSync.subscribeRealtime();
+    }
+  } catch (_) {}
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

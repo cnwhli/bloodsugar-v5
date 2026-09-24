@@ -592,30 +592,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const SizedBox(height: 16),
 
               // 桌面小组件（一键钉到桌面：血糖+心率步数，不开 App 也能看）
+              // 开关：部分 ROM 加了小组件 App 闪退时，关掉此开关即不再碰插件。
               Card(
-                child: ListTile(
-                  leading: const Icon(Icons.widgets_outlined),
-                  title: const Text('桌面小组件'),
-                  subtitle: const Text('血糖大数字放手机桌面，点一下进 App'),
-                  trailing: FilledButton.tonal(
-                    onPressed: () async {
-                      final ok =
-                          await PhoneWidget.isPinSupported();
-                      if (!context.mounted) return;
-                      if (ok) {
-                        await PhoneWidget.requestPin();
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                                '长按手机桌面空白处 → 添加小组件 → 选“血糖管家”即可'),
-                            duration: Duration(seconds: 5),
-                          ),
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.widgets_outlined),
+                      title: const Text('桌面小组件'),
+                      subtitle: const Text('血糖大数字放手机桌面，点一下进 App'),
+                      trailing: FilledButton.tonal(
+                        onPressed: () async {
+                          final ok =
+                              await PhoneWidget.isPinSupported();
+                          if (!context.mounted) return;
+                          if (ok) {
+                            await PhoneWidget.requestPin();
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                    '长按手机桌面空白处 → 添加小组件 → 选“血糖管家”即可'),
+                                duration: Duration(seconds: 5),
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text('加到桌面'),
+                      ),
+                    ),
+                    FutureBuilder<bool>(
+                      future: PhoneWidget.isEnabled(),
+                      builder: (context, snap) {
+                        final on = snap.data ?? true;
+                        return SwitchListTile(
+                          title: const Text('小组件数据推送',
+                              style: TextStyle(fontSize: 14)),
+                          subtitle: const Text('加了小组件闪退就关掉它',
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.grey)),
+                          value: on,
+                          onChanged: (v) async {
+                            await PhoneWidget.setEnabled(v);
+                            if (context.mounted) setState(() {});
+                          },
                         );
-                      }
-                    },
-                    child: const Text('加到桌面'),
-                  ),
+                      },
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 16),

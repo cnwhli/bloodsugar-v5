@@ -1,4 +1,5 @@
 import 'package:home_widget/home_widget.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 手机桌面小组件桥：血糖 + 心率/步数推到桌面（home_widget 插件）。
 ///
@@ -8,6 +9,24 @@ class PhoneWidget {
   PhoneWidget._();
 
   static const _androidName = 'GlucoseWidgetProvider';
+  static const _kEnabled = 'widget_enabled';
+
+  /// 总开关（默认开；小组件闪退时用户关掉，App 不再碰 home_widget 插件）。
+  static Future<bool> isEnabled() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getBool(_kEnabled) ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static Future<void> setEnabled(bool v) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(_kEnabled, v);
+    } catch (_) {}
+  }
 
   static bool _supportedPin = false;
 
@@ -40,6 +59,7 @@ class PhoneWidget {
     int? steps,
   }) async {
     try {
+      if (!await isEnabled()) return; // 用户关了小组件：不碰插件，直接返回
       final color = mmolL < 3.9
           ? 0xFF5AC8FA // 低：蓝
           : mmolL > 10.0
@@ -50,15 +70,16 @@ class PhoneWidget {
         HomeWidget.saveWidgetData('bg_trend', trendLabel),
         HomeWidget.saveWidgetData('bg_time', '更新于 $time'),
         HomeWidget.saveWidgetData('bg_color', color),
-        if (bpm != null)
-          HomeWidget.saveWidgetData('bg_hr', '$bpm bpm')
-        else
-          HomeWidget.saveWidgetData<String?>('bg_hr', null),
-        if (steps != null)
-          HomeWidget.saveWidgetData(
-              'bg_steps', steps >= 10000 ? '${(steps / 10000).toStringAsFixed(1)}万步' : '$steps步')
-        else
-          HomeWidget.saveWidgetData<String?>('bg_steps', null),
+        // home_widget 0.10 的 saveWidgetData<String?> 泛型传 null 在部分
+        // ROM 上闪退（荣耀 MagicOS 实测）：用空串代替 null，Kotlin 侧按空串隐藏。
+        HomeWidget.saveWidgetData('bg_hr', bpm != null ? '$bpm bpm' : ''),
+        HomeWidget.saveWidgetData(
+            'bg_steps',
+            steps != null
+                ? (steps >= 10000
+                    ? '${(steps / 10000).toStringAsFixed(1)}万步'
+                    : '$steps步')
+                : ''),
       ]);
       await HomeWidget.updateWidget(androidName: _androidName);
     } catch (_) {}

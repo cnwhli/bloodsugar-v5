@@ -20,6 +20,21 @@ class GlucoseWidgetProvider : HomeWidgetProvider() {
         appWidgetIds: IntArray,
         widgetData: SharedPreferences,
     ) {
+        // 桌面进程拉起 Provider 时 Flutter 侧一个字段都没存过也别崩：
+        // 全包 try/catch，最坏显示 --，App 本体不受影响。
+        try {
+            doUpdate(context, appWidgetManager, appWidgetIds, widgetData)
+        } catch (e: Exception) {
+            android.util.Log.e("GlucoseWidget", "onUpdate failed", e)
+        }
+    }
+
+    private fun doUpdate(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetIds: IntArray,
+        widgetData: SharedPreferences,
+    ) {
         appWidgetIds.forEach { widgetId ->
             val views =
                 RemoteViews(context.packageName, R.layout.glucose_widget).apply {
@@ -51,10 +66,12 @@ class GlucoseWidgetProvider : HomeWidgetProvider() {
                         setViewVisibility(R.id.widget_time, View.GONE)
                     }
 
-                    // 心率/步数：有就显示，没有整行隐藏（别占地方）
+                    // 心率/步数：空串=没数据，整行隐藏（别占地方）。
+                    // Dart 侧不再传 null（部分 ROM 上 saveWidgetData null 闪退），
+                    // 这里按 null 或空串都隐藏处理。
                     val hr = widgetData.getString("bg_hr", null)
                     val steps = widgetData.getString("bg_steps", null)
-                    if (hr != null || steps != null) {
+                    if (!hr.isNullOrEmpty() || !steps.isNullOrEmpty()) {
                         val line =
                             listOfNotNull(
                                 hr?.let { "❤ $it" },
