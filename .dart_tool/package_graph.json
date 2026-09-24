@@ -22,6 +22,7 @@
         "http",
         "intl",
         "path_provider",
+        "pedometer",
         "permission_handler",
         "riverpod",
         "riverpod_annotation",
@@ -136,6 +137,13 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "pedometer",
+      "version": "4.2.0",
+      "dependencies": [
+        "flutter"
       ]
     },
     {

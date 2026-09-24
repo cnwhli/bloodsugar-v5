@@ -6,6 +6,7 @@ import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
+import '../../services/watch_sensors.dart';
 import '../watch/multi_watch_arch.dart';
 
 /// 手表端血糖页面（OPPO Watch X 优先，同时手机可预览）
@@ -54,8 +55,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   int? _steps;
   int? _workoutMin;
   Timer? _sportTimer;
-  // Health Connect 状态：null=未检测，true=可用，false=没装/不可用
-  bool? _hcOk;
+  StreamSubscription? _hrSub; // 心率实时流订阅（dispose 随 _subs 一起取消）
 
   // ---- 分页 + 历史 ----
   final _pager = PageController();
@@ -150,18 +150,44 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     }
   }
 
-  /// 心率/步数/运动时长（三件套，失败就留空显示 --）。
+  /// 心率/步数/运动时长。数据源优先级：
+  /// 1. 硬件直读（WatchSensors：OPPO Watch X 自带心率+计步硬件，不经过
+  ///    Health Connect/欢太健康，国产表唯一走得通的链路）；
+  /// 2. Health Connect 兜底（运动分钟等硬件给不了的项）。
   /// 先查 Health Connect 装没装：没装直接标不可用，不让用户干等 --。
   Future<void> _loadSport() async {
+    // 硬件直读先行：要权限 → 一次读最新值（只补 Health Connect 没有的项，
+    // Health Connect 有数时以它为准，不覆盖）
+    try {
+      await WatchSensors.ensurePermission();
+      final v = await WatchSensors.latest();
+      if (!mounted) return;
+      setState(() {
+        if (v.bpm != null) _bpm = v.bpm;
+        if (v.steps != null) _steps = v.steps;
+      });
+    } catch (_) {}
+    // 心率实时流：只订阅一次（重复进 _loadSport 不重复订阅）
+    try {
+      if (_hrSub == null) {
+        _hrSub = WatchSensors.heartRateStream().listen((bpm) {
+          if (!mounted) return;
+          setState(() => _bpm = bpm);
+        });
+        _subs.add(_hrSub!);
+      }
+    } catch (_) {}
     final ok = await HealthBridge.isAvailable();
-    if (!mounted) return;
-    setState(() => _hcOk = ok);
-    if (!ok) return; // 没装：三件套留 --，点一下跳安装
+    if (!ok) {
+      // 没装 Health Connect：硬件直读的数照样显示，运动分钟记一笔手填
+      return;
+    }
     final r = await HealthBridge.readSportToday();
     if (!mounted) return;
     setState(() {
-      _bpm = r.bpm;
-      _steps = r.steps;
+      // Health Connect 有数才覆盖，没数保留硬件直读的值
+      if (r.bpm != null) _bpm = r.bpm;
+      if (r.steps != null) _steps = r.steps;
       _workoutMin = r.workoutMin;
     });
   }
@@ -327,12 +353,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     return '${ts.month}月${ts.day}日 周$w ${_fmtHM(ts)}';
   }
 
-  /// 没装 Health Connect：跳应用商店安装页，回来后重刷
-  Future<void> _goInstallHealth() async {
-    await HealthBridge.installPrompt();
+  /// 手动重刷运动数据（点数值页即刷；Health Connect 没装时只刷硬件直读）
+  Future<void> _refreshSport() async {
+    await _loadSport();
     if (!mounted) return;
     HapticFeedback.lightImpact();
-    await _loadSport();
   }
 
   @override
@@ -355,12 +380,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
                   controller: _pager,
                   onPageChanged: (i) => setState(() => _page = i),
                   children: [
-                    // 第 1 页：数值（点一下刷新，长按开关监听）
+                    // 第 1 页：数值（点一下刷新血糖+运动，长按开关监听）
                     GestureDetector(
                       onTap: () async {
                         await _loadLocal();
-                        await _loadSport();
-                        if (mounted) HapticFeedback.lightImpact();
+                        await _refreshSport();
                       },
                       onLongPress: () async {
                         HapticFeedback.heavyImpact();
@@ -491,29 +515,17 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
         const SizedBox(height: 6),
-        // 运动三件套：心率 / 步数 / 运动分钟（读不到显示 --，不断层）。
-        // 没装 Health Connect 时点一下跳安装页（国产手表常没预装）。
-        GestureDetector(
-          onTap: _hcOk == false ? _goInstallHealth : null,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _sportItem('❤', _bpm == null ? '--' : '$_bpm',
-                  'bpm', small),
-              _sportItem('👣', _fmtSteps(_steps), '步', small),
-              _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
-                  '分钟', small),
-            ],
-          ),
+        // 运动三件套：心率 / 步数 / 运动分钟（手表硬件直读优先，读不到显示 --）。
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _sportItem('❤', _bpm == null ? '--' : '$_bpm',
+                'bpm', small),
+            _sportItem('👣', _fmtSteps(_steps), '步', small),
+            _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
+                '分钟', small),
+          ],
         ),
-        if (_hcOk == false)
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(
-              '点运动区安装 Health Connect 后自动同步',
-              style: TextStyle(fontSize: small - 1, color: Colors.orange),
-            ),
-          ),
         const SizedBox(height: 10),
         // 手表独立监听大按钮（≥48px，小屏一定点得到）
         SizedBox(

@@ -650,6 +650,12 @@
       "languageVersion": "3.2"
     },
     {
+      "name": "pedometer",
+      "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/pedometer-4.2.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.8"
+    },
+    {
       "name": "permission_handler",
       "rootUri": "file:///Users/mac/.pub-cache/hosted/pub.dev/permission_handler-11.4.0",
       "packageUri": "lib/",
