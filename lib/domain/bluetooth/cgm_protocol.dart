@@ -35,6 +35,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../data/datasource/local_db.dart';
+import 'libre2_crypto.dart';
 
 // 128-bit 展开：16-bit UUID -> 标准 base UUID
 String _u16(String hex) =>
@@ -384,6 +385,10 @@ class Libre2Protocol extends CgmProtocol {
   /// NFC 扫到的传感器 UID（解密必需）。App 里扫一次后常驻内存。
   static List<int>? sensorUid;
 
+  /// 佩戴分钟数（F002 明文 data[40..41] 回填，用于历史点时间戳）。
+  /// 收不到时默认 0，历史点时间戳按收到时刻算，不挡当前点。
+  static int wearMinutes = 0;
+
   @override
   CgmBrand get brand => CgmBrand.libre2;
 
@@ -413,10 +418,26 @@ class Libre2Protocol extends CgmProtocol {
       _buffer.clear();
       return null;
     }
-    // TODO: Libre2.decryptBLE(uid, 46B) + CRC16 校验 + parseBLEData
-    // 移植目标：DiaBLE Libre2.swift decryptBLE / Crypto.swift
-    _buffer.clear();
-    return null;
+    try {
+      final plain = libre2DecryptBle(sensorUid!, _buffer.sublist(0, 46));
+      final nowWear = libreU16le(plain[40], plain[41]);
+      if (nowWear > 0) wearMinutes = nowWear;
+      final pts = libre2ParseBle(plain, nowWearMinutes: wearMinutes);
+      _buffer.clear();
+      if (pts.isEmpty) return null;
+      final p0 = pts.first;
+      return GlucoseReading(
+        valueMgDl: p0['mgDl']!.toDouble(),
+        timestamp:
+            DateTime.now().subtract(Duration(minutes: p0['minsAgo']!)),
+        trend: 0,
+        brand: brand,
+        minFromStart: wearMinutes - p0['minsAgo']!,
+      );
+    } catch (_) {
+      _buffer.clear(); // CRC 不对：坏包丢掉等下一帧
+      return null;
+    }
   }
 }
 
