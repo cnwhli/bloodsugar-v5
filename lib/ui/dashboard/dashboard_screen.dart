@@ -7,6 +7,7 @@ import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../domain/vitals/vital_types.dart';
 import '../../services/health_bridge.dart';
+import '../../services/cloud_sync.dart';
 import '../../services/phone_widget.dart';
 import '../ble/glucose_overlay.dart';
 
@@ -40,14 +41,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _loadLatest();
     // 新数进来首页自动刷：数值+时间+曲线+周统计一起更新，不用手动下拉
     _readingSub =
-        BleCgmManager().readingStream.listen((_) => _loadLatest());
+        BleCgmManager().readingStream.listen((reading) {
+      _pushReadingToCloud(reading);
+      _loadLatest();
+    });
     // 后台收数通知：退后台期间的数进来，首页数值+曲线自动补上
     _bgSub = BgSync.stream.listen((_) {
       if (mounted) _loadLatest();
     });
+    // 手机↔手表互通：登录后订阅 Realtime，对方上传秒级到本机（入库在
+    // CloudSync 回调里已做，这里只刷新 UI + 把云端心率步数带上小组件）
+    _startCloudSub();
   }
 
   StreamSubscription<String>? _bgSub;
+  bool _cloudSubOn = false;
+
+  /// 登录后订阅一次（重复进 initState 不重复订阅；未登录直接跳过）
+  Future<void> _startCloudSub() async {
+    if (_cloudSubOn || !CloudSync.isReady || !CloudSync.loggedIn) return;
+    _cloudSubOn = true;
+    try {
+      await CloudSync.subscribeRealtime(
+        onGlucose: (mmolL, trend, ts) {
+          if (!mounted) return;
+          _loadLatest(); // 对方血糖入库了，首页数值+曲线+小组件一起刷
+        },
+        onVital: (kind, v1, v2, unit, ts) {
+          if (!mounted) return;
+          _loadLatest(); // 对方心率/步数入库了，健康芯片+小组件一起刷
+        },
+      );
+    } catch (_) {
+      _cloudSubOn = false;
+    }
+  }
+
+  /// 本机收到血糖 → 推云端（手机连发射器手表实时看，反之亦然）。
+  /// insertReadingDedup 返回行 id，拼成云端 id（r+id），对方判重靠它。
+  Future<void> _pushReadingToCloud(GlucoseReading reading) async {
+    if (!CloudSync.isReady || !CloudSync.loggedIn) return;
+    try {
+      await AppDatabase.init();
+      final rows = await AppDatabase.instance.recentReadings(limit: 1);
+      if (rows.isEmpty) return;
+      final localId = (rows.first['id'] as num?)?.toInt() ?? 0;
+      await CloudSync.pushReading(
+        localId: localId,
+        mmolL: reading.valueMmolL,
+        trend: reading.trend,
+        brand: reading.brandLabel,
+        source: 'ble',
+        seq: reading.minFromStart,
+        sensorId: reading.sensorId,
+        measuredAt: reading.timestamp,
+      );
+    } catch (_) {}
+  }
 
   @override
   void dispose() {

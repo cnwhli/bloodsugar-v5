@@ -18,6 +18,7 @@ import 'package:bloodsugar_v5/ui/community/wechat_group_screen.dart';
 import 'package:bloodsugar_v5/ui/profile/profile_screen.dart';
 import 'package:bloodsugar_v5/ui/profile/alert_settings_screen.dart';
 import 'package:bloodsugar_v5/services/rag_service.dart';
+import 'package:bloodsugar_v5/services/cloud_sync.dart';
 import 'package:bloodsugar_v5/domain/bluetooth/pump_pairing.dart';
 
 void main() async {
@@ -26,6 +27,10 @@ void main() async {
   FlutterForegroundTask.initCommunicationPort();
   // 后台 isolate 收数 → 主 isolate 刷新 UI（dashboard/蓝牙页/手表页都订阅 BgSync）
   FlutterForegroundTask.addTaskDataCallback(bgTaskCallback);
+  // 云同步：本机存过 url+key 才初始化（没配过就是纯本机模式，不挡启动）
+  try {
+    await CloudSync.initFromStorage();
+  } catch (_) {}
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

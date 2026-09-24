@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../data/datasource/local_db.dart';
+import '../../services/cloud_sync.dart';
 import '../../services/csv_backup.dart';
 import 'ai_settings_screen.dart';
 import 'alert_settings_screen.dart';
+import 'cloud_sync_screen.dart';
 
 /// 个人中心：资料 + 目标范围 + AI 设置入口 + 数据导出
 class ProfileScreen extends StatefulWidget {
@@ -77,6 +79,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
             subtitle: const Text('周统计 · TIR · 最高最低'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.pushNamed(context, '/report'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.cloud_outlined),
+            title: const Text('云同步（Supabase）'),
+            subtitle: Text(CloudSync.isReady
+                ? (CloudSync.loggedIn ? '已登录：手机/手表数据互通' : '已配置：点进去登录')
+                : '手机/手表互通 + 换设备恢复，免费'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const CloudSyncScreen()),
+            ).then((_) => _load()),
           ),
           ListTile(
             leading: const Icon(Icons.family_restroom),

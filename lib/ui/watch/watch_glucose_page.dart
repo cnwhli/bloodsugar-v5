@@ -6,6 +6,7 @@ import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
+import '../../services/cloud_sync.dart';
 import '../../services/watch_sensors.dart';
 import '../watch/multi_watch_arch.dart';
 
@@ -166,6 +167,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         if (v.bpm != null) _bpm = v.bpm;
         if (v.steps != null) _steps = v.steps;
       });
+      // 直读心率入库（source=ble，和手动/Health区分）+ 推云端：
+      // 手表连表测到的心跳，手机登录同一账号秒级看到，反之亦然。
+      // 1 分钟最多记一条（传感器 1Hz 回调，不能每跳都写库）。
+      if (v.bpm != null) _cacheHr(v.bpm!);
+      if (v.steps != null) _cacheSteps(v.steps!);
     } catch (_) {}
     // 心率实时流：只订阅一次（重复进 _loadSport 不重复订阅）
     try {
@@ -173,6 +179,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         _hrSub = WatchSensors.heartRateStream().listen((bpm) {
           if (!mounted) return;
           setState(() => _bpm = bpm);
+          _cacheHr(bpm);
         });
         _subs.add(_hrSub!);
       }
@@ -190,6 +197,63 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       if (r.steps != null) _steps = r.steps;
       _workoutMin = r.workoutMin;
     });
+  }
+
+  /// 直读心率入库 + 推云：1 分钟最多一条（传感器回调频繁，不能每跳写库）。
+  /// source=ble，和手动（manual）/Health Connect（health）区分开。
+  DateTime _lastHrCache = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> _cacheHr(int bpm) async {
+    final now = DateTime.now();
+    if (now.difference(_lastHrCache).inSeconds < 60) return;
+    _lastHrCache = now;
+    try {
+      await AppDatabase.init();
+      final id = await AppDatabase.instance.insertVital(
+        kind: 'heart_rate',
+        value1: bpm.toDouble(),
+        unit: 'bpm',
+        source: 'ble',
+        device: '手表直读',
+        recordedAt: now,
+      );
+      await CloudSync.pushVital(
+        localId: id,
+        kind: 'heart_rate',
+        value1: bpm.toDouble(),
+        unit: 'bpm',
+        source: 'ble',
+        device: '手表直读',
+        measuredAt: now,
+      );
+    } catch (_) {}
+  }
+
+  /// 直读步数入库 + 推云：1 小时最多一条（计步器是累计值，记快照即可）。
+  DateTime _lastStepsCache = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> _cacheSteps(int steps) async {
+    final now = DateTime.now();
+    if (now.difference(_lastStepsCache).inMinutes < 60) return;
+    _lastStepsCache = now;
+    try {
+      await AppDatabase.init();
+      final id = await AppDatabase.instance.insertVital(
+        kind: 'steps',
+        value1: steps.toDouble(),
+        unit: '步',
+        source: 'ble',
+        device: '手表直读',
+        recordedAt: now,
+      );
+      await CloudSync.pushVital(
+        localId: id,
+        kind: 'steps',
+        value1: steps.toDouble(),
+        unit: '步',
+        source: 'ble',
+        device: '手表直读',
+        measuredAt: now,
+      );
+    } catch (_) {}
   }
 
   /// 先读本机库最新一条 + 最近历史（手表独立用：自己扫自己存，不依赖手机）

@@ -1,0 +1,351 @@
+import 'dart:async';
+
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../data/datasource/local_db.dart';
+
+/// 云同步：Supabase 账号登录 + 血糖/vitals/treatments 双向同步 + Realtime 订阅。
+///
+/// 设计（配合 supabase_schema.sql）：
+/// - key 存本机安全存储，不进代码不进仓库；
+/// - 云端 id = 本地自增 id 拼串（r/v/t 前缀），手机/手表/换设备同一条同一个 id，
+///   upsert 天然去重，不翻倍；
+/// - 上传：登录后每次新数进来调 pushReading/pushVital/pushTreatment（失败吞掉，
+///   下次整量同步时补——断网不丢）；
+/// - 下拉：syncAll 拉云端全量，按（时间+值）/（kind+时间）本地判重补缺；
+/// - 互通：subscribeRealtime 订阅三表 INSERT，手机/手表一方上传另一方秒级收到
+///   → 回调里入库 + 刷新 UI（手表连发射器手机实时看，反之亦然）。
+class CloudSync {
+  CloudSync._();
+  static bool _ready = false;
+  static bool get isReady => _ready;
+
+  static const _kUrl = 'cloud_url';
+  static const _kAnon = 'cloud_anon';
+  static const _store = FlutterSecureStorage();
+
+  static SupabaseClient get _c => Supabase.instance.client;
+  static String? get uid => _c.auth.currentUser?.id;
+  static bool get loggedIn => _c.auth.currentUser != null;
+
+  /// 启动时调：本机有存过的 url+key 才初始化（没配过就是纯本机模式，不报错）
+  static Future<bool> initFromStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final url = prefs.getString(_kUrl);
+      final anon = await _store.read(key: _kAnon);
+      if (url == null || url.isEmpty || anon == null || anon.isEmpty) {
+        return false;
+      }
+      await Supabase.initialize(url: url, publishableKey: anon);
+      
+      _ready = true;
+      return true;
+    } catch (_) {
+      _ready = false;
+      return false;
+    }
+  }
+
+  /// 首次配置：用户在我的页输入 url+anon key，存本机后初始化
+  static Future<bool> configure(String url, String anonKey) async {
+    try {
+      await Supabase.initialize(url: url.trim(), publishableKey: anonKey.trim());
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kUrl, url.trim());
+      await _store.write(key: _kAnon, value: anonKey.trim());
+      
+      _ready = true;
+      return true;
+    } catch (_) {
+      _ready = false;
+      return false;
+    }
+  }
+
+  static Future<String?> signUp(String email, String password) async {
+    try {
+      final r = await _c.auth.signUp(email: email, password: password);
+      return r.user == null ? '注册失败，请检查邮箱格式' : null;
+    } on AuthException catch (e) {
+      return e.message;
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  static Future<String?> signIn(String email, String password) async {
+    try {
+      await _c.auth.signInWithPassword(email: email, password: password);
+      return null;
+    } on AuthException catch (e) {
+      return e.message;
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  static Future<void> signOut() async {
+    try {
+      await _c.auth.signOut();
+    } catch (_) {}
+  }
+
+  static Future<void> clearConfig() async {
+    try {
+      await signOut();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kUrl);
+      await _store.delete(key: _kAnon);
+      _ready = false;
+      
+    } catch (_) {}
+  }
+
+  // ---------------- 上传（单条，失败吞掉等整量同步补） ----------------
+
+  static Future<void> pushReading({
+    required int localId,
+    required double mmolL,
+    required int trend,
+    required String brand,
+    required String source,
+    int? seq,
+    required String sensorId,
+    required DateTime measuredAt,
+  }) async {
+    if (!_ready || !loggedIn) return;
+    try {
+      await _c.from('cloud_readings').upsert({
+        'id': 'r$localId',
+        'user_id': uid,
+        'mmol_l': mmolL,
+        'mg_dl': (mmolL * 18.0182).round(),
+        'trend': trend,
+        'brand': brand,
+        'source': source,
+        'seq': seq,
+        'sensor_id': sensorId,
+        'measured_at': measuredAt.toIso8601String(),
+      });
+    } catch (_) {}
+  }
+
+  static Future<void> pushVital({
+    required int localId,
+    required String kind,
+    double? value1,
+    double? value2,
+    required String unit,
+    required String source,
+    required String device,
+    required DateTime measuredAt,
+  }) async {
+    if (!_ready || !loggedIn) return;
+    try {
+      await _c.from('cloud_vitals').upsert({
+        'id': 'v$localId',
+        'user_id': uid,
+        'kind': kind,
+        'value1': value1,
+        'value2': value2,
+        'unit': unit,
+        'source': source,
+        'device': device,
+        'measured_at': measuredAt.toIso8601String(),
+      });
+    } catch (_) {}
+  }
+
+  static Future<void> pushTreatment({
+    required int localId,
+    required String type,
+    required String detail,
+    double? amount,
+    required String unit,
+    required String extra,
+    required DateTime measuredAt,
+  }) async {
+    if (!_ready || !loggedIn) return;
+    try {
+      await _c.from('cloud_treatments').upsert({
+        'id': 't$localId',
+        'user_id': uid,
+        'type': type,
+        'detail': detail,
+        'amount': amount,
+        'unit': unit,
+        'extra': extra,
+        'measured_at': measuredAt.toIso8601String(),
+      });
+    } catch (_) {}
+  }
+
+  // ---------------- 下拉整量同步（换设备恢复 / 断网补洞） ----------------
+  //
+  /// 返回 (补入血糖条数, 补入vitals条数, 补入treatments条数)
+  static Future<(int, int, int)> syncAll() async {
+    if (!_ready || !loggedIn) return (0, 0, 0);
+    await AppDatabase.init();
+    var gr = 0, vr = 0, tr = 0;
+    try {
+      final rows = await _c
+          .from('cloud_readings')
+          .select()
+          .order('measured_at', ascending: true)
+          .limit(5000);
+      for (final m in (rows as List)) {
+        final mmol = (m['mmol_l'] as num?)?.toDouble() ?? 0;
+        if (mmol <= 0) continue;
+        DateTime ts;
+        try {
+          ts = DateTime.parse('${m['measured_at']}').toLocal();
+        } catch (_) {
+          continue;
+        }
+        final ok = await AppDatabase.instance.importReading(
+          mmolL: mmol,
+          timestamp: ts,
+          brand: '${m['brand'] ?? '云端'}',
+        );
+        if (ok) gr++;
+      }
+    } catch (_) {}
+    try {
+      final rows = await _c
+          .from('cloud_vitals')
+          .select()
+          .order('measured_at', ascending: true)
+          .limit(5000);
+      for (final m in (rows as List)) {
+        DateTime ts;
+        try {
+          ts = DateTime.parse('${m['measured_at']}').toLocal();
+        } catch (_) {
+          continue;
+        }
+        try {
+          await AppDatabase.instance.insertVital(
+            kind: '${m['kind']}',
+            value1: (m['value1'] as num?)?.toDouble(),
+            value2: (m['value2'] as num?)?.toDouble(),
+            unit: '${m['unit'] ?? ''}',
+            source: 'health',
+            device: '${m['device'] ?? ''}',
+            recordedAt: ts,
+          );
+          vr++;
+        } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      final rows = await _c
+          .from('cloud_treatments')
+          .select()
+          .order('measured_at', ascending: true)
+          .limit(2000);
+      for (final m in (rows as List)) {
+        DateTime ts;
+        try {
+          ts = DateTime.parse('${m['measured_at']}').toLocal();
+        } catch (_) {
+          continue;
+        }
+        try {
+          await AppDatabase.instance.insertTreatment(
+            type: '${m['type']}',
+            detail: '${m['detail'] ?? ''}',
+            amount: (m['amount'] as num?)?.toDouble(),
+            unit: '${m['unit'] ?? ''}',
+            extra: '${m['extra'] ?? ''}',
+            recordedAt: ts,
+          );
+          tr++;
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return (gr, vr, tr);
+  }
+
+  // ---------------- Realtime 互通（手机↔手表秒级同步） ----------------
+  //
+  /// onGlucose: 收到对方血糖 (mmolL, trend, isoTime)
+  /// onVital: 收到对方身体指标 (kind, value1, isoTime)
+  /// 订阅前确保 Replication 已加三表（见 supabase_schema.sql 第 5 节），
+  /// 没加时订阅连上但收不到 INSERT，不报错——后台 SQL 执行完重进 App 即可。
+  static RealtimeChannel? _ch;
+  static Future<void> subscribeRealtime({
+    void Function(double mmolL, int trend, DateTime ts)? onGlucose,
+    void Function(String kind, double? v1, double? v2, String unit, DateTime ts)?
+        onVital,
+  }) async {
+    if (!_ready || !loggedIn) return;
+    try {
+      await _ch?.unsubscribe();
+      final me = uid;
+      _ch = _c.channel('device-sync');
+      _ch!
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'cloud_readings',
+            callback: (payload) async {
+              try {
+                final m = payload.newRecord;
+                if (m['user_id'] == me) {
+                  // 自己上传的不回环（本机已有，判重也会吞，但少一次库操作）
+                  return;
+                }
+                final mmol = (m['mmol_l'] as num?)?.toDouble() ?? 0;
+                if (mmol <= 0) return;
+                final ts = DateTime.parse('${m['measured_at']}').toLocal();
+                await AppDatabase.init();
+                await AppDatabase.instance.importReading(
+                  mmolL: mmol,
+                  timestamp: ts,
+                  brand: '${m['brand'] ?? '云端'}',
+                );
+                onGlucose?.call(
+                    mmol, (m['trend'] as num?)?.toInt() ?? 0, ts);
+              } catch (_) {}
+            },
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'cloud_vitals',
+            callback: (payload) async {
+              try {
+                final m = payload.newRecord;
+                if (m['user_id'] == me) return;
+                final ts = DateTime.parse('${m['measured_at']}').toLocal();
+                await AppDatabase.init();
+                await AppDatabase.instance.insertVital(
+                  kind: '${m['kind']}',
+                  value1: (m['value1'] as num?)?.toDouble(),
+                  value2: (m['value2'] as num?)?.toDouble(),
+                  unit: '${m['unit'] ?? ''}',
+                  source: 'health',
+                  device: '云同步',
+                  recordedAt: ts,
+                );
+                onVital?.call('${m['kind']}',
+                    (m['value1'] as num?)?.toDouble(),
+                    (m['value2'] as num?)?.toDouble(),
+                    '${m['unit'] ?? ''}', ts);
+              } catch (_) {}
+            },
+          )
+          .subscribe();
+    } catch (_) {}
+  }
+
+  static Future<void> unsubscribeRealtime() async {
+    try {
+      await _ch?.unsubscribe();
+    } catch (_) {}
+    _ch = null;
+  }
+}

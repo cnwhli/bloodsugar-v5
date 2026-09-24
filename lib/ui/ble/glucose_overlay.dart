@@ -156,11 +156,21 @@ class GlucoseOverlay {
   static bool _showing = false;
   static bool get isShowing => _showing;
 
+  /// 权限：overlay 弹窗失败，九成是国产 ROM（ColorOS/OriginOS/MagicOS）
+  /// 在系统侧关了“悬浮窗/显示在其他应用上层”开关——插件的
+  /// requestPermission 只跳应用详情页，用户得在里面手动开，开完退到
+  /// 桌面才会飘窗，所以拿不到权限就直接报去哪开，不重试。
   static Future<bool> ensurePermission() async {
     final ok = await FlutterOverlayWindow.isPermissionGranted();
     if (ok == true) return true;
-    final granted = await FlutterOverlayWindow.requestPermission();
-    return granted == true;
+    try {
+      final granted = await FlutterOverlayWindow.requestPermission();
+      if (granted == true) return true;
+      // 一次拿不到：ColorOS 跳的是详情页，用户需手动开——直接走 isActive 兜底
+      return await FlutterOverlayWindow.isPermissionGranted() == true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> show() async {
@@ -170,6 +180,8 @@ class GlucoseOverlay {
         enableDrag: true,
         overlayTitle: '血糖悬浮窗',
         overlayContent: '实时血糖显示中',
+        // clickThrough 会让窗不响应触摸但在部分 ROM 上整窗不渲染；
+        // 默认 flag（可点击+可聚焦）最稳，窗出来后手指可拖走。
         flag: OverlayFlag.defaultFlag,
         visibility: NotificationVisibility.visibilityPublic,
         positionGravity: PositionGravity.right,
