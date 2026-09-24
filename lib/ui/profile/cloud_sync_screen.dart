@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../services/cloud_sync.dart';
+import 'watch_login_scan_screen.dart';
 
 /// 云同步页：Supabase 账号登录 + 一键同步 + 换设备恢复。
 ///
@@ -22,6 +24,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
   bool _busy = false;
   bool _ready = false;
   bool _loggedIn = false;
+  String? _qrPayload; // 手表扫码登录的二维码内容（点一下出一个，点码隐藏）
 
   @override
   void initState() {
@@ -123,6 +126,39 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
             ),
             const SizedBox(height: 8),
             if (!_loggedIn) ...[
+              // 手表上小屏输密码不现实：优先扫码（手机云同步页出码），
+              // 实在没手机在身边才手动输邮箱密码。
+              OutlinedButton.icon(
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        final ok = await Navigator.push<bool>(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) =>
+                                  const WatchLoginScanScreen()),
+                        );
+                        if (ok == true && mounted) {
+                          setState(() => _loggedIn = true);
+                        }
+                      },
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('扫码登录（扫手机上的码）'),
+              ),
+              const SizedBox(height: 8),
+              const Row(
+                children: [
+                  Expanded(child: Divider()),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('或手动输入',
+                        style:
+                            TextStyle(color: Colors.grey, fontSize: 12)),
+                  ),
+                  Expanded(child: Divider()),
+                ],
+              ),
+              const SizedBox(height: 8),
               TextField(
                 controller: _emailCtrl,
                 keyboardType: TextInputType.emailAddress,
@@ -183,6 +219,54 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                 icon: const Icon(Icons.sync),
                 label: const Text('立即同步 / 从云端恢复'),
               ),
+              const SizedBox(height: 8),
+              // 手表免输密码登录：手机显示二维码（60秒有效），手表扫一下
+              // 就是同一账号——手表圆屏小，输邮箱密码不现实。
+              OutlinedButton.icon(
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        setState(() {
+                          _busy = true;
+                          _msg = '';
+                          _qrPayload = null;
+                        });
+                        try {
+                          final p =
+                              await CloudSync.readLoginQrPayload();
+                          if (!mounted) return;
+                          setState(() {
+                            _qrPayload = p;
+                            _msg = p == null
+                                ? '先登录账号（二维码和登录同寿命，要先有登录）'
+                                : '手表打开 云同步→扫码登录，扫这个码（60秒有效，过期点一下重出）';
+                          });
+                        } catch (e) {
+                          if (!mounted) return;
+                          setState(() => _msg = '$e');
+                        } finally {
+                          if (mounted) setState(() => _busy = false);
+                        }
+                      },
+                icon: const Icon(Icons.qr_code),
+                label: const Text('手表扫码登录（二维码）'),
+              ),
+              if (_qrPayload != null) ...[
+                const SizedBox(height: 8),
+                GestureDetector(
+                  onTap: () => setState(() => _qrPayload = null),
+                  child: Center(
+                    child: Container(
+                      color: Colors.white,
+                      padding: const EdgeInsets.all(8),
+                      child: QrImageView(
+                        data: _qrPayload!,
+                        size: 200,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
               Row(
                 children: [

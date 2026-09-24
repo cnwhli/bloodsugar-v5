@@ -111,41 +111,61 @@ class _GlucoseOverlayWidgetState extends State<GlucoseOverlayWidget> {
 
   @override
   Widget build(BuildContext context) {
+    // 全屏透明层：右中对齐一张小卡片（show 用 matchParent 全屏渲染，
+    // 小窗数值在 MagicOS/ColorOS 上经常整窗空白——内容自己定位最稳；
+    // 全屏层不挡触摸：外层 ignorePointer，只卡片自己可点可拖）
     return Material(
       color: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.75),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _c, width: 2),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              _v > 0 ? _v.toStringAsFixed(1) : '--',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: _c == Colors.green ? Colors.white : _c,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: true,
+              child: Container(color: Colors.transparent),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.75),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _c, width: 2),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _v > 0 ? _v.toStringAsFixed(1) : '--',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: _c == Colors.green ? Colors.white : _c,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_trend,
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.white70)),
+                        Text(_time,
+                            style: const TextStyle(
+                                fontSize: 10, color: Colors.white54)),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 6),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(_trend,
-                    style:
-                        const TextStyle(fontSize: 12, color: Colors.white70)),
-                Text(_time,
-                    style:
-                        const TextStyle(fontSize: 10, color: Colors.white54)),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -182,18 +202,22 @@ class GlucoseOverlay {
   static Future<void> show() async {
     if (_showing) return;
     try {
+      // 实测结论（MagicOS/ColorOS 上权限开了退桌面仍没窗的病根）：
+      // 1. width/height 用小窗数值时 WindowManager 只给了 160x72dp 的
+      //    FlutterView，overlayMain 的 MaterialApp 在里面渲染，多端实测
+      //    黑底小窗经常整窗空白——改 matchParent 让引擎全屏渲染，
+      //    内容自己用居右小卡片定位（官方 example 就是这么干的）；
+      // 2. positionGravity.right 在部分 ROM 上把窗推出屏幕外——改 auto。
       await FlutterOverlayWindow.showOverlay(
         enableDrag: true,
         overlayTitle: '血糖悬浮窗',
         overlayContent: '实时血糖显示中',
-        // clickThrough 会让窗不响应触摸但在部分 ROM 上整窗不渲染；
-        // 默认 flag（可点击+可聚焦）最稳，窗出来后手指可拖走。
         flag: OverlayFlag.defaultFlag,
         visibility: NotificationVisibility.visibilityPublic,
-        positionGravity: PositionGravity.right,
+        positionGravity: PositionGravity.auto,
         alignment: OverlayAlignment.centerRight,
-        width: 160,
-        height: 72,
+        width: WindowSize.matchParent,
+        height: WindowSize.matchParent,
       );
       _showing = true;
     } catch (_) {

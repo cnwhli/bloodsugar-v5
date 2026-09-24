@@ -42,6 +42,8 @@
     <!-- 悬浮窗：显示在其他应用上层 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 扫码登录：手表扫手机二维码（mobile_scanner 要 CAMERA 权限） -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 

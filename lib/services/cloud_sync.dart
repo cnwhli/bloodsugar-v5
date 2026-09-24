@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -95,7 +96,14 @@ class CloudSync {
 
   static Future<String?> signIn(String email, String password) async {
     try {
-      await _c.auth.signInWithPassword(email: email, password: password);
+      final r =
+          await _c.auth.signInWithPassword(email: email, password: password);
+      // 登录成功马上把 access/refresh token 存本机：换设备/手表扫码后
+      // 直接 recoverSession，不用在手表小屏上再输一遍密码。
+      try {
+        final s = r.session;
+        if (s != null) await _saveSessionTokens(s);
+      } catch (_) {}
       return null;
     } on AuthException catch (e) {
       return e.message;
@@ -108,6 +116,91 @@ class CloudSync {
     try {
       await _c.auth.signOut();
     } catch (_) {}
+    // token 清掉：否则下一台设备/下一个账号可能复用到旧会话
+    try {
+      await _store.delete(key: _kAccess);
+      await _store.delete(key: _kRefresh);
+    } catch (_) {}
+  }
+
+  // ---------------- token 存取（换设备/手表免输密码登录用） ----------------
+
+  static const _kAccess = 'cloud_access_token';
+  static const _kRefresh = 'cloud_refresh_token';
+
+  static Future<void> _saveSessionTokens(Session s) async {
+    try {
+      await _store.write(key: _kAccess, value: s.accessToken);
+      final rt = s.refreshToken;
+      if (rt != null && rt.isNotEmpty) {
+        await _store.write(key: _kRefresh, value: rt);
+      }
+    } catch (_) {}
+  }
+
+  /// 本机存过 token（手机登录过）→ 直接恢复会话，不用输密码。
+  /// 返回 null 成功，非 null 是失败原因。
+  /// access 必须非空（gotrue recoverSession 要求 json 里有 access_token，
+  /// 光 refresh 不行——手机登录时两个都存，这里两个都要有）。
+  static Future<String?> signInWithSavedTokens() async {
+    try {
+      final access = await _store.read(key: _kAccess);
+      final refresh = await _store.read(key: _kRefresh);
+      if (access == null ||
+          access.isEmpty ||
+          refresh == null ||
+          refresh.isEmpty) {
+        return '本机没存过登录（先在手机上登录一次，或用扫码把登录传过来）';
+      }
+      final r = await _c.auth.setSession(refresh);
+      final s = r.session;
+      if (s != null) await _saveSessionTokens(s);
+      return null;
+    } on AuthException catch (e) {
+      return e.message;
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  /// 扫码登录：手表扫手机上的二维码（内容就是下面的串），直接恢复同一会话。
+  /// payload 格式：access\x00refresh（base64 url-safe 编码过一次）。
+
+  static Future<String?> readLoginQrPayload() async {
+    try {
+      final access = await _store.read(key: _kAccess);
+      final refresh = await _store.read(key: _kRefresh);
+      if (access == null ||
+          access.isEmpty ||
+          refresh == null ||
+          refresh.isEmpty) {
+        return null;
+      }
+      final raw = '$access\x00$refresh';
+      return base64Url.encode(utf8.encode(raw));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 手表扫到上面的串 → 同一账号直接登录，不用输密码。
+  static Future<String?> signInWithQrPayload(String payload) async {
+    try {
+      final raw = utf8.decode(base64Url.decode(payload.trim()));
+      final i = raw.indexOf('\x00');
+      if (i <= 0) return '二维码不对，重新扫一下';
+      final access = raw.substring(0, i);
+      final refresh = raw.substring(i + 1);
+      if (access.isEmpty || refresh.isEmpty) return '二维码不对，重新扫一下';
+      final r = await _c.auth.setSession(refresh, accessToken: access);
+      final s = r.session;
+      if (s != null) await _saveSessionTokens(s);
+      return null;
+    } on AuthException catch (e) {
+      return e.message;
+    } catch (e) {
+      return '$e';
+    }
   }
 
   static Future<void> clearConfig() async {
