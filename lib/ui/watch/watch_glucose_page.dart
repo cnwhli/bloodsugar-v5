@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../data/datasource/local_db.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
 import '../../services/cloud_sync.dart';
 import '../../services/watch_sensors.dart';
+import '../ble/cgm_foreground_service.dart';
 import '../watch/multi_watch_arch.dart';
 
 /// 手表端血糖页面（OPPO Watch X 优先，同时手机可预览）
@@ -290,6 +292,9 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   Future<void> _toggleScan() async {
     if (_lowPowerOn) {
       await _manager.disconnect();
+      try {
+        await CgmForegroundService.stop();
+      } catch (_) {}
       if (mounted) setState(() => _lowPowerOn = false);
       return;
     }
@@ -297,7 +302,20 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     // 之前手表用 Timer 每分钟唤起扫 20 秒的省电轮询，在这块安卓手表上
     // burst 根本起不来（日志只有"省电监听"提示、从无"附近："设备），
     // 而昨天早上的手机端持续监听是可以的——先保证连上，费电以后再优化。
+    //
+    // 灭屏保活：手表和手机一样起 CgmForegroundService 前台服务，
+    // 之前手表只裸 startScan()、切后台/灭屏 1-2 分钟就被系统杀掉丢数，
+    // 起了服务后灭屏照样收，通知栏还能看到当前值。
+    // 先要"忽略电池优化"，否则国产手表（ColorOS for Watch）灭屏就杀服务。
+    try {
+      await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    } catch (_) {}
     final err = await _manager.startScan();
+    if (err == null) {
+      try {
+        await CgmForegroundService.start();
+      } catch (_) {}
+    }
     if (!mounted) return;
     setState(() {
       _lowPowerOn = err == null;

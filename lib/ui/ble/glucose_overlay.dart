@@ -163,10 +163,16 @@ class GlucoseOverlay {
   static Future<bool> ensurePermission() async {
     final ok = await FlutterOverlayWindow.isPermissionGranted();
     if (ok == true) return true;
+    // 注意：插件调起的是 actionManageOverlayPermission 系统页，
+    // 用户可能只是看了眼就按返回——requestPermission 的返回值不可信，
+    // 用 requestPermission() 只负责"跳过去"，回来后以二次查询为准。
     try {
-      final granted = await FlutterOverlayWindow.requestPermission();
-      if (granted == true) return true;
-      // 一次拿不到：ColorOS 跳的是详情页，用户需手动开——直接走 isActive 兜底
+      await FlutterOverlayWindow.requestPermission();
+    } catch (_) {}
+    // 给系统页一点关闭时间，再二次确认（ColorOS 跳的是详情页，
+    // 用户需手动开悬浮窗开关——不开这里就是 false，直说去哪开）
+    await Future.delayed(const Duration(milliseconds: 500));
+    try {
       return await FlutterOverlayWindow.isPermissionGranted() == true;
     } catch (_) {
       return false;
