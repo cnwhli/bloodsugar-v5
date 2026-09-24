@@ -450,7 +450,8 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
 
   /// 第 1 页：大数值 + 监听大按钮 + 诊断折叠
   Widget _buildValuePage({required Color statusColor}) {
-    final big = widget.shape.isCircular ? 40.0 : 56.0;
+    // 血糖数字调小（用户反馈太大把下面内容挤出屏），心率/步数卡片置顶放大。
+    final big = widget.shape.isCircular ? 30.0 : 38.0;
     final small = widget.shape.isCircular ? 11.0 : 13.0;
     final logs = _diagLogs.length > 10
         ? _diagLogs.sublist(_diagLogs.length - 10)
@@ -479,7 +480,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           ),
           const SizedBox(height: 8),
         ],
-        // 血糖值
+        // 血糖值（调小：之前 40/56 把心率步数挤出屏看不到）
         Text(
           _hasData ? _mmolL.toStringAsFixed(1) : '--',
           style: TextStyle(
@@ -490,21 +491,18 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         ),
         Text(
           _hasData
-              ? '${(_mmolL * 18.0182).toStringAsFixed(0)} mg/dL'
+              ? '${(_mmolL * 18.0182).toStringAsFixed(0)} mg/dL ${_trendLabel(_trend)}'
               : '暂无数据',
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
-        const SizedBox(height: 4),
-        Text(
-          _trendLabel(_trend),
-          style: TextStyle(
-              fontSize: small + 4, color: statusColor),
-        ),
         const SizedBox(height: 2),
         // 日期时间（手表抬腕先看今天几号几点，不用退回表盘）
-        Text(
-          _fmtDateTime(DateTime.now()),
-          style: TextStyle(fontSize: small, color: Colors.grey),
+        GestureDetector(
+          onTap: () => setState(() {}), // 点一下刷新时间（抬腕常亮不准时手动刷）
+          child: Text(
+            _fmtDateTime(DateTime.now()),
+            style: TextStyle(fontSize: small + 2, color: Colors.white70),
+          ),
         ),
         const SizedBox(height: 2),
         Text(
@@ -514,17 +512,29 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
-        const SizedBox(height: 6),
-        // 运动三件套：心率 / 步数 / 运动分钟（手表硬件直读优先，读不到显示 --）。
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _sportItem('❤', _bpm == null ? '--' : '$_bpm',
-                'bpm', small),
-            _sportItem('👣', _fmtSteps(_steps), '步', small),
-            _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
-                '分钟', small),
-          ],
+        const SizedBox(height: 8),
+        // 心率/步数卡片：放大置顶（用户主要看心跳，之前被挤出屏）。
+        // 有数白字，无数灰字 --，一眼看出传感器通没通。
+        Container(
+          width: double.infinity,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white10,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _sportItem('❤', _bpm == null ? '--' : '$_bpm', 'bpm',
+                  small + 2, dim: _bpm == null),
+              _sportItem('👣', _fmtSteps(_steps), '步', small + 2,
+                  dim: _steps == null),
+              _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
+                  '分钟', small + 2,
+                  dim: _workoutMin == null),
+            ],
+          ),
         ),
         const SizedBox(height: 10),
         // 手表独立监听大按钮（≥48px，小屏一定点得到）
@@ -787,16 +797,18 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
 
   /// 运动小项：图标 + 值 + 单位（值读不到显示 --）
   Widget _sportItem(
-      String icon, String value, String unit, double fontSize) {
+      String icon, String value, String unit, double fontSize,
+      {bool dim = false}) {
+    final vColor = dim ? Colors.white38 : Colors.white;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(icon, style: TextStyle(fontSize: fontSize + 2)),
         Text(value,
             style: TextStyle(
-                fontSize: fontSize + 4,
+                fontSize: fontSize + 6,
                 fontWeight: FontWeight.bold,
-                color: Colors.white)),
+                color: vColor)),
         Text(unit,
             style:
                 TextStyle(fontSize: fontSize - 1, color: Colors.grey)),
