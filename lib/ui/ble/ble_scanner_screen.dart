@@ -6,7 +6,9 @@ import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
 import '../../services/bg_sync.dart';
+import '../../services/cloud_sync.dart';
 import '../../services/glucodata_forward.dart';
+import '../../services/nightscout_sync.dart';
 import '../../services/health_bridge.dart';
 import '../../services/phone_widget.dart';
 import 'cgm_foreground_service.dart';
@@ -86,12 +88,29 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       if (!inserted) return; // 重复广播：UI 已有，后续推送/报警跳过
       // 系统健康平台同步（OPPO Watch X 官方血糖表盘只能从这里读数）
       HealthBridge.writeGlucose(reading.valueMmolL, reading.timestamp);
+      // 云同步上传（登录后自动传，双方秒级互通；没登录/断网静默跳过）。
+      // localId 用库自增 id：刚入库，查同（序号,发射器）/时间值拿回 id。
+      CloudSync.pushReading(
+        localId: await AppDatabase.instance.latestReadingId(reading),
+        mmolL: reading.valueMmolL,
+        trend: reading.trend,
+        brand: reading.brand.displayName,
+        source: 'ble',
+        seq: reading.minFromStart,
+        sensorId: reading.sensorId,
+        measuredAt: reading.timestamp,
+      );
+      // Nightscout 上传（配了自家 NS 服务器才传，家属远程看用）
+      NightscoutSync.push(
+        mgDl: reading.valueMgDl,
+        time: reading.timestamp,
+      );
       // GlucoData 标准广播转发（第三方表盘/车机/Tasker 可订阅读数）
       GlucoDataForward.push(
         mmolL: reading.valueMmolL,
         rateMgDlMin: 0,
         time: reading.timestamp,
-        sensorId: reading.sensorId ?? '',
+        sensorId: reading.sensorId,
       );
       // 悬浮窗同步最新值（含时间）
       GlucoseOverlay.push(reading.valueMmolL, reading.trend,

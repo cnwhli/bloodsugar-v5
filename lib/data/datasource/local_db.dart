@@ -254,6 +254,33 @@ class AppDatabase {
       '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
 
+  /// 刚入库那条的自增 id（云同步 localId 用：upsert 去重键 r+id）。
+  /// 有序号按（序号,发射器）找，无序号按下单时间+值找；找不到返回时间戳毫秒兜底。
+  Future<int> latestReadingId(GlucoseReading reading) async {
+    try {
+      if (reading.minFromStart != null) {
+        final rows = await _db!.query(
+          'glucose_readings',
+          columns: ['id'],
+          where: 'min_from_start = ? AND COALESCE(sensor_id, \'\') = ?',
+          whereArgs: [reading.minFromStart, reading.sensorId],
+          orderBy: 'id DESC',
+          limit: 1,
+        );
+        if (rows.isNotEmpty) return (rows.first['id'] as num).toInt();
+      } else {
+        final rows = await _db!.query(
+          'glucose_readings',
+          columns: ['id'],
+          orderBy: 'id DESC',
+          limit: 1,
+        );
+        if (rows.isNotEmpty) return (rows.first['id'] as num).toInt();
+      }
+    } catch (_) {}
+    return reading.timestamp.millisecondsSinceEpoch;
+  }
+
   /// 去重插入：同发射器同一分钟序号（minFromStart+sensorId）已有则跳过。
   /// sensorId = 广播名后6位配对码（GlucoseReading.sensorId），换发射器后
   /// 序号从 0 重计也能区分——旧逻辑只看序号，换发射器后新点全被当重复吞掉。

@@ -113,13 +113,34 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                         ),
                 child: const Text('连接'),
               ),
-            ] else
+            ] else ...[
               const Card(
                 child: ListTile(
                   leading: Icon(Icons.check_circle, color: Colors.green),
-                  title: Text('项目已内置，登录账号即可同步'),
+                  title: Text('项目已内置，不用填 URL/key'),
+                  subtitle: Text('点下面按钮连接，然后登录账号即可'),
                 ),
               ),
+              const SizedBox(height: 8),
+              FilledButton(
+                onPressed: _busy
+                    ? null
+                    : () => _run(
+                          () async {
+                            final ok =
+                                await CloudSync.initFromStorage();
+                            if (ok && mounted) {
+                              setState(() => _ready = true);
+                            }
+                            return ok
+                                ? '连接成功，登录账号即可同步'
+                                : '连接失败：检查网络后重试';
+                          },
+                          '连接成功',
+                        ),
+                child: const Text('一键连接'),
+              ),
+            ],
           ] else ...[
             Card(
               child: ListTile(
