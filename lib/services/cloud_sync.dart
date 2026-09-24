@@ -318,7 +318,7 @@ class CloudSync {
         'source': source,
         'seq': seq,
         'sensor_id': sensorId,
-        'measured_at': measuredAt.toIso8601String(),
+        'measured_at': measuredAt.toUtc().toIso8601String(),
       });
     } catch (_) {}
   }
@@ -344,7 +344,7 @@ class CloudSync {
         'unit': unit,
         'source': source,
         'device': device,
-        'measured_at': measuredAt.toIso8601String(),
+        'measured_at': measuredAt.toUtc().toIso8601String(),
       });
     } catch (_) {}
   }
@@ -368,7 +368,7 @@ class CloudSync {
         'amount': amount,
         'unit': unit,
         'extra': extra,
-        'measured_at': measuredAt.toIso8601String(),
+        'measured_at': measuredAt.toUtc().toIso8601String(),
       });
     } catch (_) {}
   }
