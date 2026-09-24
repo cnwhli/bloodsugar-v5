@@ -20,7 +20,7 @@ class CsvBackup {
     );
     if (rows.isEmpty) return;
     final buf = StringBuffer();
-    buf.writeln('time,value_mmol_l,value_mg_dl,trend,brand,source,min_from_start');
+    buf.writeln('time,value_mmol_l,value_mg_dl,trend,brand,source,min_from_start,sensor_id');
     for (final r in rows) {
       final time = (r['created_at'] ?? '').toString().replaceAll(',', ' ');
       final vMmol = (r['value_mmol_l'] as num?)?.toDouble().toStringAsFixed(1) ?? '';
@@ -29,7 +29,8 @@ class CsvBackup {
       final brand = (r['brand'] ?? '').toString().replaceAll(',', ' ');
       final source = (r['source'] ?? '').toString().replaceAll(',', ' ');
       final seq = (r['min_from_start'] as num?)?.toInt() ?? 0;
-      buf.writeln('$time,$vMmol,${vMg.toStringAsFixed(0)},$trend,$brand,$source,$seq');
+      final sid = (r['sensor_id'] ?? '').toString().replaceAll(',', ' ');
+      buf.writeln('$time,$vMmol,${vMg.toStringAsFixed(0)},$trend,$brand,$source,$seq,$sid');
     }
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/bloodsugar_export.csv');

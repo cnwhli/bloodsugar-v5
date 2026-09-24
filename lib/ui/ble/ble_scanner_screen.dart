@@ -156,6 +156,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         trend: d.trend,
         brand: _manager.protocols.first.brand,
         minFromStart: d.seq,
+        sensorId: d.sensorId,
       );
       final inserted =
           await AppDatabase.instance.insertReadingDedup(r);
@@ -165,7 +166,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       // 列表置顶不能省——否则"收了数但列表不显示"。
       setState(() {
         final dup = r.minFromStart != null
-            ? _readings.any((e) => e.minFromStart == r.minFromStart)
+            ? _readings.any((e) =>
+                e.minFromStart == r.minFromStart && e.sensorId == r.sensorId)
             : _readings.any((e) =>
                 (e.valueMmolL - r.valueMmolL).abs() < 0.06 &&
                 e.timestamp.difference(r.timestamp).inSeconds.abs() < 120);

@@ -21,7 +21,7 @@ class AppDatabase {
     final dbPath = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dbPath, 'bloodsugar.db'),
-      version: 7,
+      version: 8,
       onCreate: _createTables,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
@@ -126,6 +126,28 @@ class AppDatabase {
                 'CREATE UNIQUE INDEX idx_glucose_minseq_unique ON glucose_readings(min_from_start)');
           } catch (_) {}
         }
+        if (oldV < 8) {
+          // v8：换发射器后 min_from_start 从 0 重计，旧唯一索引会把新发射器的
+          // 第 0..N 分钟全判成重复吞掉——页面看起来"连上了但没新数"。
+          // 改为（序号, 发射器）联合唯一：同发射器同序号去重，换发射器不误杀。
+          try {
+            await db.execute('DROP INDEX idx_glucose_minseq_unique');
+          } catch (_) {}
+          try {
+            await db.execute(
+                'ALTER TABLE glucose_readings ADD COLUMN sensor_id TEXT DEFAULT \'\'');
+          } catch (_) {}
+          try {
+            await db.execute('''DELETE FROM glucose_readings WHERE id NOT IN (
+                SELECT MIN(id) FROM glucose_readings
+                GROUP BY COALESCE(min_from_start, -id),
+                         COALESCE(sensor_id, ''))''');
+          } catch (_) {}
+          try {
+            await db.execute(
+                'CREATE UNIQUE INDEX idx_glucose_seq_sensor_unique ON glucose_readings(min_from_start, sensor_id)');
+          } catch (_) {}
+        }
       },
     );
   }
@@ -137,6 +159,7 @@ class AppDatabase {
         value_mmol_l REAL NOT NULL,
         value_mg_dl INTEGER,
         min_from_start INTEGER,
+        sensor_id TEXT DEFAULT '',
         trend INT DEFAULT 0,
         brand TEXT,
         source TEXT CHECK(source IN ('ble','manual','csv')),
@@ -152,7 +175,7 @@ class AppDatabase {
     ''');
     // v7 新装：序号唯一（防前后 isolate 并发双写产生同序号多行，见 onUpgrade oldV<7）
     await db.execute('''
-      CREATE UNIQUE INDEX idx_glucose_minseq_unique ON glucose_readings(min_from_start)
+      CREATE UNIQUE INDEX idx_glucose_seq_sensor_unique ON glucose_readings(min_from_start, sensor_id)
     ''');
     await db.execute('''
       CREATE TABLE community_posts (
@@ -219,6 +242,7 @@ class AppDatabase {
       'value_mg_dl': reading.valueMgDl.round(),
       'value_mmol_l': reading.valueMgDl.round() / 18.0182,
       'min_from_start': reading.minFromStart,
+      'sensor_id': reading.sensorId,
       'trend': reading.trend,
       'brand': reading.brand.displayName,
       'source': 'ble',
@@ -230,19 +254,16 @@ class AppDatabase {
       '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
 
-  /// 去重插入：同一分钟序号（minFromStart）已有则跳过，返回 false。
-  /// AiDEX 每分钟广播一个新序号（55 秒窗口是前台/后台 isolate 双写的
-  /// 到达差，不是发射器 cadence）。旧逻辑按 45 秒同值去重：上一分钟的
-  /// 点和这一分钟的点时间差经常 < 45 秒 → 新点被误杀，看起来像冻结；
-  /// 而同一广播的双写必然同序号 → 按序号去重既防双写又不误杀新点。
-  /// 没有序号的读数（手动/其他品牌）回退到 45 秒同值去重。
+  /// 去重插入：同发射器同一分钟序号（minFromStart+sensorId）已有则跳过。
+  /// sensorId = 广播名后6位配对码（GlucoseReading.sensorId），换发射器后
+  /// 序号从 0 重计也能区分——旧逻辑只看序号，换发射器后新点全被当重复吞掉。
   Future<bool> insertReadingDedup(GlucoseReading reading) async {
     try {
       if (reading.minFromStart != null) {
         final rows = await _db!.query(
           'glucose_readings',
-          where: 'min_from_start = ?',
-          whereArgs: [reading.minFromStart],
+          where: 'min_from_start = ? AND COALESCE(sensor_id, \'\') = ?',
+          whereArgs: [reading.minFromStart, reading.sensorId],
           limit: 1,
         );
         if (rows.isNotEmpty) return false;

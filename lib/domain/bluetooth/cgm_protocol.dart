@@ -73,6 +73,7 @@ class GlucoseReading {
   final CgmBrand brand;
   final int? quality; // 信号质量（AiDEX 广播带）
   final int? minFromStart; // 发射器启动分钟序号（AiDEX 广播带，去重用）
+  final String sensorId; // 发射器身份（AiDEX 广播名后6位配对码，如 22222FJV7J）
   final String? rawBrand; // 数据库里的原始品牌字串（未知品牌回显用）
 
   GlucoseReading({
@@ -82,6 +83,7 @@ class GlucoseReading {
     required this.brand,
     this.quality,
     this.minFromStart,
+    this.sensorId = '',
     this.rawBrand,
   }) : valueMmolL = valueMgDl / 18.0182;
 
@@ -119,6 +121,7 @@ class GlucoseReading {
       trend: (m['trend'] as num?)?.toInt() ?? 0,
       brand: brand,
       minFromStart: (m['min_from_start'] as num?)?.toInt(),
+      sensorId: '${m['sensor_id'] ?? ''}',
       rawBrand: brand == CgmBrand.unknown && raw.isNotEmpty ? raw : null,
     );
   }
@@ -251,6 +254,13 @@ class AidexProtocol extends CgmProtocol {
   Future<List<GlucoseReading>> parseAdvertisementAll(ScanResult r) async {
     final mfg = r.advertisementData.manufacturerData[0x0059];
     if (mfg == null || mfg.length < 15) return const [];
+    // 发射器身份 = 广播名后6位配对码（如 AiDEX x-22222FJV7J → 22FJV7J…
+    // 取后6位与发射器贴纸/配对码一致）。换发射器后 minFromStart 从 0 重计，
+    // 去重必须按（序号, 发射器）联合判，否则旧唯一索引把新发射器的点全吞掉。
+    final advName = r.advertisementData.advName;
+    final sensorId = advName.length >= 6
+        ? advName.substring(advName.length - 6).toUpperCase()
+        : advName.toUpperCase();
     // LastPast（当前分钟）: minfromstart(2) status(1) calTemp(1) trend(1)
     // glucose(2) quality(1)，之后紧跟 prev[0]、prev[1]（各 3 字节：
     // glucose:10/unknown:5/valid:1 + quality(1)），分别对应前 1、2 分钟。
@@ -288,6 +298,7 @@ class AidexProtocol extends CgmProtocol {
         brand: brand,
         quality: quality,
         minFromStart: minFromStart,
+        sensorId: sensorId,
       ));
     }
     // prev 两分钟：时间戳按分钟回拨，保证曲线不断点
@@ -307,6 +318,7 @@ class AidexProtocol extends CgmProtocol {
           brand: brand,
           quality: pq,
           minFromStart: pm,
+          sensorId: sensorId,
         ));
       }
     }
@@ -752,18 +764,21 @@ class BleCgmManager {
   // 注意：按“分钟序号(minFromStart)”去重，而不是按数值——
   // 数值长时间不变也必须每分钟收一条，否则曲线成断点、数值"一直不变"
   int? _lastMinFromStart;
+  String _lastSensorId = '';
   DateTime _lastEmittedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _shouldEmit(GlucoseReading r) {
     final now = DateTime.now();
-    // 同一分钟序号 60 秒内只收一次（广播几秒一次，防刷屏）；
-    // 分钟序号变了就收——数值不变也要收，否则曲线断点
+    // 同一发射器同一分钟序号 60 秒内只收一次（广播几秒一次，防刷屏）；
+    // 换发射器（sensorId 变了）直接放行——序号从 0 重计也要收。
     if (_lastMinFromStart != null &&
         _lastMinFromStart == r.minFromStart &&
+        _lastSensorId == r.sensorId &&
         now.difference(_lastEmittedAt).inSeconds < 60) {
       return false;
     }
     _lastMinFromStart = r.minFromStart;
+    _lastSensorId = r.sensorId;
     _lastEmittedAt = now;
     return true;
   }

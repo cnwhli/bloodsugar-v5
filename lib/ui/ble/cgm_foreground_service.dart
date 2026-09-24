@@ -33,10 +33,10 @@ class CgmBackgroundHandler extends TaskHandler {
         // BgSync 发 mmol/L（主 isolate 按时间戳+数值去重，与序号无关）。
         // 后台 isolate 的 reading 带 minFromStart，入库走序号去重；
         // 主 isolate 收到后走 45 秒同值去重——两个窗口不打架。
-        // v2：seq 一起透过来（BgSync.encode），主 isolate 重建 reading 时
-        // 带上 minFromStart，判重与前台同口径，不再出现"同秒多条"。
-        FlutterForegroundTask.sendDataToMain(BgSync.encode(
-            r.valueMmolL, r.trend, r.timestamp, r.minFromStart));
+        // v3：seq+sensorId 一起透过来（BgSync.encode），主 isolate 重建
+        // reading 时带上 minFromStart+sensorId，判重与前台同口径。
+        FlutterForegroundTask.sendDataToMain(BgSync.encode(r.valueMmolL,
+            r.trend, r.timestamp, r.minFromStart, r.sensorId));
       } catch (_) {}
     });
     // 后台用省电模式：扫 15 秒、停 45 秒（发射器 1 分钟广播一次，不漏数）。
