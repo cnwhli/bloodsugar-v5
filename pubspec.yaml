@@ -1,7 +1,7 @@
 name: bloodsugar_v5
 description: 动态血糖仪跨平台 App - 多品牌直连 + OPPO Watch + 免费糖友社区
 publish_to: 'none'
-version: 5.0.0+1
+version: 5.1.0+2
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
