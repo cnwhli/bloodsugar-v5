@@ -21,7 +21,11 @@ class CgmBackgroundHandler extends TaskHandler {
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     _m = BleCgmManager();
     await AppDatabase.init();
-    await HealthBridge.ensureAuth();
+    // 注意：这里不要 ensureAuth/弹授权框。后台 isolate 直接 requestAuthorization
+    // 会抛 MissingPluginException（health 插件的 MethodChannel 在后台 engine 没注册），
+    // onStart 直接崩 → 服务秒死 → \"手表灭屏就断\"。
+    // HealthBridge.writeGlucose 内部已 try-catch，失败只跳过写平台，不影响入库。
+    // 前台 isolate（手表页/蓝牙页）该授的权都授过，后台只管收数入库。
     // 后台只做三件事：收数 → 入库 + 同步写系统健康平台（供手表官方表盘读）
     // + 通知主 isolate 刷新 UI（后台与主 isolate 的 readingStream 不互通，
     // 不 sendDataToMain 主 isolate 永远不知道有新数——"退后台就断"的病根之二）。

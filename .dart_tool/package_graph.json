@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "bloodsugar_v5",
-      "version": "5.0.0+1",
+      "version": "5.1.0+2",
       "dependencies": [
         "audioplayers",
         "crypto",
@@ -16,6 +16,7 @@
         "flutter",
         "flutter_blue_plus",
         "flutter_foreground_task",
+        "flutter_markdown",
         "flutter_overlay_window",
         "flutter_secure_storage",
         "google_fonts",
@@ -141,6 +142,16 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "flutter_markdown",
+      "version": "0.7.7+1",
+      "dependencies": [
+        "flutter",
+        "markdown",
+        "meta",
+        "path"
       ]
     },
     {
@@ -939,6 +950,14 @@
         "stream_channel",
         "string_scanner",
         "term_glyph"
+      ]
+    },
+    {
+      "name": "markdown",
+      "version": "7.3.1",
+      "dependencies": [
+        "args",
+        "meta"
       ]
     },
     {

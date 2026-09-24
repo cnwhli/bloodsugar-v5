@@ -1116,7 +1116,14 @@ class BleCgmManager {
     return null;
   }
 
-  /// 开始扫描 CGM 设备（前台持续监听，点"断开"才停）
+  /// 开始扫描 CGM 设备（前台持续监听，点"断开"才停）。
+  /// 注意：主 isolate 的 startScan 与后台 isolate 的常驻扫描**不能并存**——
+  /// flutter_blue_plus 新版 startScan 前会先 _stopScan() 停掉已有扫描
+  /// （见 fbp 1.36.8 src/flutter_blue_plus.dart startScan：already scanning → stop existing scan），
+  /// 而停止是**进程级**的：主 isolate 点开始监听，会把后台 isolate 的扫描一起停掉，
+  /// 后台 onStart 里挂的 _sub 从此收不到广播——"手表一进页面就断、灭屏才有数"的病根。
+  /// 修法：启动前问一句后台服务在跑没——在跑就不调平台 startScan，只挂
+  /// _attachListener 收广播（_scanSub 是 isolate 内订阅，_attachListener 已用 ??= 防重挂）。
   /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
   /// quiet=true：后台切回前台自动续扫时用，不重复刷"开始监听"日志
   /// 前台扫描标记：App 从后台切回前台时，若标记为 true 且系统停了扫，自动续扫
