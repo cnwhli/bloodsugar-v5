@@ -294,13 +294,28 @@ class AidexProtocol extends CgmProtocol {
     return false;
   }
 
+  /// 最近一次解析失败的原因（给诊断日志看；成功时清空）。
+  /// 之前从"附近"到"入库"之间所有失败都是静默 return []，
+  /// 手表看到发射器却没数，完全不知道卡在哪——现在每步都留一句话。
+  static String lastDiag = '';
+
   @override
   Future<List<GlucoseReading>> parseAdvertisementAll(ScanResult r) async {
     final mfg = r.advertisementData.manufacturerData[0x0059];
-    if (mfg == null || mfg.length < 15) return const [];
+    if (mfg == null) {
+      lastDiag = 'AiDEX诊断：这包只有名字没有厂家数据（分包广播，下一包就有，不用管）';
+      return const [];
+    }
+    if (mfg.length < 15) {
+      lastDiag = 'AiDEX诊断：厂家数据过短 len=${mfg.length}（系统截断，把手表靠近发射器试试）';
+      return const [];
+    }
     // 坏包直接扔：CRC 不对的整包丢弃，不进库不污染曲线
     // （Juggluco glucose.h goodcrc()；系统截断不足 20 字节时放行保兼容）。
-    if (!_goodCrc(mfg)) return const [];
+    if (!_goodCrc(mfg)) {
+      lastDiag = 'AiDEX诊断：CRC校验失败（坏包已丢弃不污染曲线；偶发正常，一直刷就是离得远/有干扰）';
+      return const [];
+    }
     // 发射器身份 = 广播名后6位配对码（如 AiDEX x-22222FJV7J → 22FJV7J…
     // 取后6位与发射器贴纸/配对码一致）。换发射器后 minFromStart 从 0 重计，
     // 去重必须按（序号, 发射器）联合判，否则旧唯一索引把新发射器的点全吞掉。
@@ -368,6 +383,11 @@ class AidexProtocol extends CgmProtocol {
           sensorId: sensorId,
         ));
       }
+    }
+    if (out.isEmpty) {
+      lastDiag = 'AiDEX诊断：发射器标 valid=$valid glucose=$glucose（预热/故障时为0，官方App里也无数值可对照）';
+    } else {
+      lastDiag = '';
     }
     return out;
   }
@@ -945,6 +965,17 @@ class BleCgmManager {
     return true;
   }
 
+  DateTime _lastDiagAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 诊断日志节流：广播一分钟几十包，同类诊断 60 秒只刷一条，免得刷屏
+  /// 把真正的数值日志淹没。
+  void _diagThrottled(String msg) {
+    final now = DateTime.now();
+    if (now.difference(_lastDiagAt).inSeconds < 60) return;
+    _lastDiagAt = now;
+    _log(msg);
+  }
+
   /// 省电轮询（后台/手表用）：扫 15 秒、停 45 秒循环。
   /// 发射器 1 分钟广播一次，15 秒窗口足够抓住；其余时间射频休眠。
   /// 比 continuousScan 省电一个数量级，和发射器 cadence 对齐不漏数。
@@ -1016,16 +1047,18 @@ class BleCgmManager {
         final advName = r.advertisementData.advName;
         if (_seen.add(id)) {
           if (advName.isNotEmpty) {
-            _log('附近：$advName');
+            _log('附近：$advName（信号 ${r.rssi}dBm，越接近0越近）');
           } else {
             final svcs = r.advertisementData.serviceUuids
                 .map((g) => g.toString().substring(4, 8).toUpperCase())
                 .join(',');
-            _log('附近：(无名) $id 服务[$svcs]');
+            _log('附近：(无名) $id 服务[$svcs]（信号 ${r.rssi}dBm）');
           }
         }
+        var handled = false;
         for (final protocol in _protocols) {
           if (!protocol.matches(r)) continue;
+          handled = true;
           final name = advName.isEmpty ? id : advName;
           if (protocol.isAdvertisementBased) {
             // 多点解析：广播包里带的 prev 历史点也一起收（App 刚开/中间漏扫时补洞）。
@@ -1034,7 +1067,14 @@ class BleCgmManager {
             // 不用 DateTime.now()——否则同分钟的重复广播每次入库时间都不同秒，
             // 按 45 秒回退去重的老逻辑（无序号品牌）误杀，列表出现同秒 4 条。
             protocol.parseAdvertisementAll(r).then((readings) {
-              if (readings.isEmpty) return;
+              if (readings.isEmpty) {
+                // 解出空：把协议里记的原因刷出来（节流），否则"看到设备没数"无从查
+                if (protocol is AidexProtocol &&
+                    AidexProtocol.lastDiag.isNotEmpty) {
+                  _diagThrottled(AidexProtocol.lastDiag);
+                }
+                return;
+              }
               final fresh = readings.first;
               if (_shouldEmit(fresh)) {
                 _emitReading(fresh);
@@ -1052,6 +1092,11 @@ class BleCgmManager {
             _connectToDevice(r.device, protocol);
           }
           break;
+        }
+        if (!handled && advName.toLowerCase().contains('aidex')) {
+          _diagThrottled(
+              'AiDEX诊断：看到名字但包结构对不上（service/厂家数据缺失）——'
+              '多是微泰官方App在手机上占着发射器，或手表离得远包被截断');
         }
       }
     });
