@@ -27,8 +27,25 @@ class CloudSync {
   static const _store = FlutterSecureStorage();
 
   static SupabaseClient get _c => Supabase.instance.client;
-  static String? get uid => _c.auth.currentUser?.id;
-  static bool get loggedIn => _c.auth.currentUser != null;
+  static String? get uid {
+    try {
+      if (!_ready) return null;
+      return _c.auth.currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 注意：App 刚装、还没配过 url+key 时 Supabase 根本没初始化，
+  /// 直接读 instance.client 会抛异常白屏——这里吞掉返回未登录。
+  static bool get loggedIn {
+    try {
+      if (!_ready) return false;
+      return _c.auth.currentUser != null;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// 启动时调：本机有存过的 url+key 才初始化（没配过就是纯本机模式，不报错）
   static Future<bool> initFromStorage() async {
