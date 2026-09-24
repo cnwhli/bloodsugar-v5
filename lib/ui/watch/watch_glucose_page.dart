@@ -192,13 +192,15 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
 
   Future<void> _toggleScan() async {
     if (_lowPowerOn) {
-      await _manager.stopLowPowerWatch();
+      await _manager.disconnect();
       if (mounted) setState(() => _lowPowerOn = false);
       return;
     }
-    // 手表用省电监听：每分钟扫 15 秒（对齐发射器广播），其余休眠——
-    // 手表电池小，不能像手机前台那样持续 lowLatency 扫描。
-    final err = await _manager.startLowPowerWatch();
+    // 手表直连：和手机端一样的持续监听（continuous+lowLatency，无 timeout）。
+    // 之前手表用 Timer 每分钟唤起扫 20 秒的省电轮询，在这块安卓手表上
+    // burst 根本起不来（日志只有"省电监听"提示、从无"附近："设备），
+    // 而昨天早上的手机端持续监听是可以的——先保证连上，费电以后再优化。
+    final err = await _manager.startScan();
     if (!mounted) return;
     setState(() {
       _lowPowerOn = err == null;
