@@ -35,6 +35,16 @@ jobs:
           channel: stable
       - run: flutter pub get
       - run: flutter analyze || true
+      # 固定签名：keystore 来自仓库 Secrets（ANDROID_KEYSTORE_B64 等 4 个）；
+      # 未配置时跳过此步，构建自动回退 debug 签名（见 build.gradle.kts）。
+      - name: 解码签名 keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
       - run: >-
           flutter build apk --release
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }}

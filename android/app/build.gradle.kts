@@ -33,9 +33,22 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // 固定签名：keystore 由 CI Secrets 注入（见 build.yml 解码步骤）；
+            // 无 keystore 时回退 debug 签名，保证本地/CI 首次构建不断。
+            // 注意：debug 签名包与固定签名包互相覆盖安装会报签名不一致，
+            // 切换签名只需卸载重装一次，之后固定签名包之间可直接覆盖。
+            val ksFile = file(System.getenv("KEYSTORE_PATH") ?: "release.keystore")
+            if (ksFile.exists()) {
+                signingConfigs.create("fixed") {
+                    storeFile = ksFile
+                    storePassword = System.getenv("KEYSTORE_PASSWORD")
+                    keyAlias = System.getenv("KEY_ALIAS")
+                    keyPassword = System.getenv("KEY_PASSWORD")
+                }
+                signingConfig = signingConfigs.getByName("fixed")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 }
