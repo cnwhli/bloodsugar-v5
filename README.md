@@ -21,6 +21,7 @@ One app for your phone and your watch — real-time glucose, health vitals, and 
 - **连不上自诊断**：从"附近"到"入库"每步失败都写人话日志（无厂家数据/CRC坏包/valid=0/官方App抢连/信号dBm），60秒节流不刷屏
 - **前后台不断链**：后台服务在跑时前台只复用不重启扫描；切后台/锁屏照样收，回来自动补列表
 - **连接退避**：连不上的设备（硅基握手失败）90秒×失败次数内不再试（最多10分钟），不再每次广播都停扫重连拖累微泰广播收数
+- **固定签名**：Release 包用固定 keystore 签名（CI Secrets 注入），包之间可直接覆盖安装，不再报签名不一致
 
 ### ⌚ 手表端 — 为 OPPO Watch X 而生
 
