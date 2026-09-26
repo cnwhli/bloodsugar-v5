@@ -1281,17 +1281,42 @@ class BleCgmManager {
       BluetoothDevice device, CgmProtocol protocol) async {
     _setState(BleCgmState.connecting);
     try {
-      await protocol.handleDevice(device, (reading) {
-        _emitReading(reading); // 进 history 缓存，切页/重进不丢
-      }, _log);
-      _connectedDevice = device;
-      _setState(BleCgmState.connected);
-      _log('已连接 ${device.platformName}');
+      await _runHandleDevice(device, protocol);
     } catch (e) {
       _log('连接失败：$e');
       _connecting.remove(device.remoteId.toString());
       _setState(BleCgmState.error);
     }
+  }
+
+  /// 真正的建连+握手（含连接后断线监听）。抽出来是给重连复用的：
+  /// 首次连和断流重连走同一套，行为一致。
+  Future<void> _runHandleDevice(
+      BluetoothDevice device, CgmProtocol protocol) async {
+    await protocol.handleDevice(device, (reading) {
+      _emitReading(reading); // 进 history 缓存，切页/重进不丢
+    }, _log);
+    _connectedDevice = device;
+    _setState(BleCgmState.connected);
+    _log('已连接 ${device.platformName}');
+    // 连接型断流自愈：连上后监听设备连接状态，断了就自动重连，
+    // 不用用户手动重连。广播型（AiDEX）不受影响——它本来就不需要连。
+    try {
+      device.connectionState.listen((s) async {
+        if (s != BluetoothConnectionState.disconnected) return;
+        if (_connectedDevice?.remoteId != device.remoteId) return; // 已换设备，不管旧的
+        _log('连接断开，10 秒后自动重连 ${device.platformName}…');
+        await Future.delayed(const Duration(seconds: 10));
+        if (_connectedDevice?.remoteId != device.remoteId) return; // 期间用户点了断开/换了设备，停
+        try {
+          await _runHandleDevice(device, protocol);
+        } catch (e) {
+          _log('自动重连失败：$e（下次扫到设备会再试）');
+          _connectedDevice = null;
+          _connecting.remove(device.remoteId.toString());
+        }
+      });
+    } catch (_) {}
   }
 
   /// 断开/停止：停省电轮询 + 停扫描 + 断 GATT。切页面不调这个，只有点"断开"和退出才调。
