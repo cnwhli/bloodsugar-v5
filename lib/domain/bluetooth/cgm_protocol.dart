@@ -865,6 +865,11 @@ class BleCgmManager {
   List<CgmProtocol> get protocols => List.unmodifiable(_protocols);
 
   final Set<String> _connecting = {};
+  // 连接退避：同一设备 90 秒内只试连一次。之前失败/断开后每次广播都
+  // 立刻重连，每次重连都要 stopScan——微泰广播在停扫这几秒里全丢，
+  // 硅基反复连不上时微泰就被连带饿死，这就是"连着连着都没数了"的病根。
+  final Map<String, DateTime> _lastConnAttempt = {};
+  final Map<String, int> _connFailCount = {};
   BluetoothDevice? _connectedDevice;
   BleCgmState _state = BleCgmState.idle;
   final _stateController = StreamController<BleCgmState>.broadcast();
@@ -1132,6 +1137,20 @@ class BleCgmManager {
             });
           } else {
             if (_connecting.contains(id)) continue;
+            // 退避：失败/断开过的设备别见面就连。之前每次广播都立刻重连，
+            // 每次重连 stopScan 几秒——微泰广播在这几秒里全丢，
+            // 硅基反复连不上时微泰被连带饿死，"连着连着都没数了"。
+            final fails = _connFailCount[id] ?? 0;
+            final last = _lastConnAttempt[id];
+            // 首次见面直接连；失败过：90秒×失败次数（最多10分钟）内不再试
+            final backoff = Duration(
+                seconds: fails == 0
+                    ? 0
+                    : (90 * fails).clamp(90, 600));
+            if (last != null &&
+                DateTime.now().difference(last) < backoff) {
+              continue;
+            }
             _connecting.add(id);
             _log('发现 $name（${protocol.brand.displayName}），连接中…');
             // 边扫边连必超时（GATT 147）：Android 射频同一时间只能干一件事，
@@ -1280,10 +1299,15 @@ class BleCgmManager {
   Future<void> _connectToDevice(
       BluetoothDevice device, CgmProtocol protocol) async {
     _setState(BleCgmState.connecting);
+    _lastConnAttempt[device.remoteId.toString()] = DateTime.now();
     try {
       await _runHandleDevice(device, protocol);
+      _connFailCount.remove(device.remoteId.toString()); // 连上清零
     } catch (e) {
       _log('连接失败：$e');
+      _connFailCount[device.remoteId.toString()] =
+          ((_connFailCount[device.remoteId.toString()] ?? 0) + 1)
+              .clamp(1, 7); // 退避越拉越长，最多10分钟一试
       _connecting.remove(device.remoteId.toString());
       _setState(BleCgmState.error);
     }
@@ -1310,8 +1334,12 @@ class BleCgmManager {
         if (_connectedDevice?.remoteId != device.remoteId) return; // 期间用户点了断开/换了设备，停
         try {
           await _runHandleDevice(device, protocol);
+          _connFailCount.remove(device.remoteId.toString()); // 重连上清零
         } catch (e) {
-          _log('自动重连失败：$e（下次扫到设备会再试）');
+          _log('自动重连失败：$e（退避后自动再试，不用手动连）');
+          _connFailCount[device.remoteId.toString()] =
+              ((_connFailCount[device.remoteId.toString()] ?? 0) + 1)
+                  .clamp(1, 7);
           _connectedDevice = null;
           _connecting.remove(device.remoteId.toString());
         }
