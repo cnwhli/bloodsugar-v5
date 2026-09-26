@@ -611,11 +611,10 @@ class SibionicsProtocol extends CgmProtocol {
   @override
   bool matches(ScanResult r) {
     final name = r.advertisementData.advName.toUpperCase();
-    // GS1 广播名是 10 位以上序列号（AAC25B18AAFZ型）。但 LT 开头的
-    // 是硅基发射器蓝牙名（LT2408LBFL），不是序列号——之前误匹配，
-    // 把发射器当 GS1 连，握手必然失败。LT 开头的不走这条。
-    if (name.startsWith('LT')) return false;
-    if (RegExp(r'^[A-Z0-9]{10,}$').hasMatch(name)) return true; // AAC25B18AAFZ 型
+    // LT 开头是硅基发射器蓝牙名（用户实测 LT2408LBFL 就是 GS1），
+    // 必须匹配——上版误排除导致硅基直接检测不到，已回退。
+    // GS1 靠 10 位序列号或 5347 service 双通道匹配。
+    if (RegExp(r'^[A-Z0-9]{10,}$').hasMatch(name)) return true; // AAC25B18AAFZ / LT2408LBFL 型
     return r.advertisementData.serviceUuids
         .map((g) => g.toString().toLowerCase())
         .contains(svc);
