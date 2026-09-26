@@ -967,6 +967,27 @@ class BleCgmManager {
 
   DateTime _lastDiagAt = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// 链路看门狗：收到任何品牌的新数都喂狗；5 分钟没数 → 提醒断链，
+  /// 而不是静默丢数（"手表还是断链"却无感知，就是缺这个）。
+  void _linkWatchdog() {
+    _lastDataAt = DateTime.now();
+    _linkLostBuzzed = false;
+  }
+
+  DateTime _lastDataAt = DateTime.now();
+  bool _linkLostBuzzed = false;
+
+  /// 供页面/后台定时调用：检查是否断链（5 分钟无新数）
+  /// 返回 true = 刚判定断链（调用方负责震动/通知，只触发一次直到恢复）
+  bool checkLinkLost() {
+    if (!_linkLostBuzzed &&
+        DateTime.now().difference(_lastDataAt).inMinutes >= 5) {
+      _linkLostBuzzed = true;
+      return true;
+    }
+    return false;
+  }
+
   /// 诊断日志节流：广播一分钟几十包，同类诊断 60 秒只刷一条，免得刷屏
   /// 把真正的数值日志淹没。
   void _diagThrottled(String msg) {
@@ -1040,7 +1061,7 @@ class BleCgmManager {
   final Set<String> _seen = {};
 
   void _attachListener() {
-    _scanSub ??= FlutterBluePlus.scanResults.listen((results) {
+    _scanSub ??= FlutterBluePlus.scanResults.listen((results) async {
       for (final r in results) {
         _burstSeen++; // 任何广播都计数：区分"没扫到"和"扫到没解出"
         final id = r.device.remoteId.toString();
@@ -1076,6 +1097,7 @@ class BleCgmManager {
                 return;
               }
               final fresh = readings.first;
+              _linkWatchdog(); // 有新数就喂狗：蓝牙链路活着
               if (_shouldEmit(fresh)) {
                 _emitReading(fresh);
                 _log('${fresh.valueMmolL.toStringAsFixed(1)} mmol/L · '
@@ -1089,7 +1111,20 @@ class BleCgmManager {
             if (_connecting.contains(id)) continue;
             _connecting.add(id);
             _log('发现 $name（${protocol.brand.displayName}），连接中…');
-            _connectToDevice(r.device, protocol);
+            // 边扫边连必超时（GATT 147）：Android 射频同一时间只能干一件事，
+            // 持续扫描占着 radio，connect 直接超时。连之前先停扫，
+            // 成败都重开扫描（广播监听不能断）。
+            await FlutterBluePlus.stopScan().catchError((_) {});
+            _connectToDevice(r.device, protocol).whenComplete(() async {
+              _connecting.remove(id);
+              try {
+                await FlutterBluePlus.startScan(
+                  continuousUpdates: true,
+                  removeIfGone: const Duration(minutes: 2),
+                  androidScanMode: AndroidScanMode.lowLatency,
+                );
+              } catch (_) {}
+            });
           }
           break;
         }
