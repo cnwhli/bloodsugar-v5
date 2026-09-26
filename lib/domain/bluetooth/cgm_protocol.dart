@@ -625,6 +625,17 @@ class SibionicsProtocol extends CgmProtocol {
         await device.requestMtu(247);
       } catch (_) {}
       await device.discoverServices();
+      // 先把整机服务/特征打出来：GS1 的 FF30/FF31/FF32 不一定全在，
+      // 分体款、老固件可能只有 5347 或名字服务。日志里看到底有啥，
+      // 再决定走哪条握手——而不是直接报"没找到"。
+      final svcList = <String>[];
+      for (final s in device.servicesList) {
+        final chars = s.characteristics
+            .map((c) => c.uuid.toString().substring(4, 8).toUpperCase())
+            .join(',');
+        svcList.add('${s.uuid.toString().substring(4, 8).toUpperCase()}[$chars]');
+      }
+      log('硅基服务一览：${svcList.join(' ')}');
       BluetoothCharacteristic? ff31;
       BluetoothCharacteristic? ff32;
       for (final s in device.servicesList) {
@@ -637,8 +648,20 @@ class SibionicsProtocol extends CgmProtocol {
           }
         }
       }
+      // 兜底：不管在哪层 service 下，只要整机有 FF31/FF32 就拿来用
+      // （部分固件把 FF31/FF32 挂在 5347 下而非 FF30 下）。
       if (ff31 == null || ff32 == null) {
-        log('硅基握手失败：没找到 FF31/FF32');
+        for (final s in device.servicesList) {
+          for (final c in s.characteristics) {
+            final cu = c.uuid.toString().toLowerCase();
+            if (cu == notifyChr) ff31 ??= c;
+            if (cu == writeChr) ff32 ??= c;
+          }
+        }
+      }
+      if (ff31 == null || ff32 == null) {
+        log('硅基握手失败：整机无 FF31/FF32（见上行服务一览；'
+            '若只有180A/180F说明发射器未激活或被官方App独占，先杀官方App重连）');
         try {
           await device.disconnect();
         } catch (_) {}
