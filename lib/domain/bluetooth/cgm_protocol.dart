@@ -38,6 +38,16 @@ import '../../data/datasource/local_db.dart';
 import 'libre2_crypto.dart';
 import 'sibionics_crypto.dart';
 
+// UUID 短显示：标准 128-bit 取中间段（如 181F/FF31）；
+// 16-bit 短格式（如 180A，只有 4 字符）直接原样显示。
+// 之前无脑 substring(4,8)，扫到短 UUID 就 RangeError，整个广播批次
+// 处理中断——同批次里的微泰包被连带丢掉，这就是"微泰没有数据"的病根。
+String _shortUuid(dynamic g) {
+  final s = g.toString();
+  if (s.length >= 8) return s.substring(4, 8).toUpperCase();
+  return s.toUpperCase();
+}
+
 // 128-bit 展开：16-bit UUID -> 标准 base UUID
 String _u16(String hex) =>
     '0000${hex.toLowerCase()}-0000-1000-8000-00805f9b34fb';
@@ -601,6 +611,10 @@ class SibionicsProtocol extends CgmProtocol {
   @override
   bool matches(ScanResult r) {
     final name = r.advertisementData.advName.toUpperCase();
+    // GS1 广播名是 10 位以上序列号（AAC25B18AAFZ型）。但 LT 开头的
+    // 是硅基发射器蓝牙名（LT2408LBFL），不是序列号——之前误匹配，
+    // 把发射器当 GS1 连，握手必然失败。LT 开头的不走这条。
+    if (name.startsWith('LT')) return false;
     if (RegExp(r'^[A-Z0-9]{10,}$').hasMatch(name)) return true; // AAC25B18AAFZ 型
     return r.advertisementData.serviceUuids
         .map((g) => g.toString().toLowerCase())
@@ -631,9 +645,9 @@ class SibionicsProtocol extends CgmProtocol {
       final svcList = <String>[];
       for (final s in device.servicesList) {
         final chars = s.characteristics
-            .map((c) => c.uuid.toString().substring(4, 8).toUpperCase())
+            .map((c) => _shortUuid(c.uuid))
             .join(',');
-        svcList.add('${s.uuid.toString().substring(4, 8).toUpperCase()}[$chars]');
+        svcList.add('${_shortUuid(s.uuid)}[$chars]');
       }
       log('硅基服务一览：${svcList.join(' ')}');
       BluetoothCharacteristic? ff31;
@@ -1106,7 +1120,7 @@ class BleCgmManager {
             _log('附近：$advName（信号 ${r.rssi}dBm，越接近0越近）');
           } else {
             final svcs = r.advertisementData.serviceUuids
-                .map((g) => g.toString().substring(4, 8).toUpperCase())
+                .map((g) => _shortUuid(g))
                 .join(',');
             _log('附近：(无名) $id 服务[$svcs]（信号 ${r.rssi}dBm）');
           }
