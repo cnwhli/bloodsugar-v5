@@ -66,7 +66,7 @@ One app for your phone and your watch — real-time glucose, health vitals, and 
 | Libre 3 | ⏳ 发现设备、读不到数 | ECDH 证书认证流程待移植 |
 | Dexcom G6 | ⏳ 发现设备、读不到数 | AuthRequest/Challenge 握手待移植 |
 | Dexcom G7 | ⏳ 同上 | J-PAKE 交换待移植 |
-| 硅基 GS1/GS3 | ⏳ UUID 已对，待真机验证 | FF32 握手 + FF31 解析（待移植 Juggluco 流程） |
+| 硅基 GS1/GS3 | ✅ UUID 已对 + 全机兜底查找 | FF32 握手 + FF31 解析（等真机日志确认挂哪套服务） |
 | Accu-Chek SmartGuide | ⏳ 同上 | 标准 sfloat + RACP 取历史待移植 |
 | Medtronic Guardian / Simplera | ❌ 无公开协议 | 开源界亦无直连方案，只能走 CareLink 云 |
 
