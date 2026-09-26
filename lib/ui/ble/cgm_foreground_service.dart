@@ -101,11 +101,15 @@ class CgmForegroundService {
       serviceTypes: [ForegroundServiceTypes.connectedDevice],
     );
     _started = true;
+    // 告诉前台 manager：后台正在扫，前台只挂监听别碰平台扫描
+    // （否则前台 startScan 会把后台的扫描停掉 → 切后台就断）
+    BleCgmManager.backgroundRunning = true;
   }
 
   static Future<void> stop() async {
     if (!_started) return;
     await FlutterForegroundTask.stopService();
     _started = false;
+    BleCgmManager.backgroundRunning = false;
   }
 }
