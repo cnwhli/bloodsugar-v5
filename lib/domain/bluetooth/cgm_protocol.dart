@@ -1024,13 +1024,33 @@ class BleCgmManager {
 
   DateTime _lastDataAt = DateTime.now();
   bool _linkLostBuzzed = false;
+  // 分钟级断流盯防：AiDEX 每分钟广播一次，正常 60-90 秒必有新数。
+  // 之前 5 分钟才报断链，中间 7-8 分钟空洞静默无感知。
+  // 改为：90 秒无数 → 打"X分X秒没新数"（只日志不震动）；
+  // 3 分钟无数 → 报断链（震动+自动重扫），空洞压到 3 分钟内。
+  DateTime _lastGapWarnAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// 供页面/后台定时调用：检查是否断链（5 分钟无新数）
   /// 返回 true = 刚判定断链（调用方负责震动/通知，只触发一次直到恢复）
   bool checkLinkLost() {
     if (!_linkLostBuzzed &&
-        DateTime.now().difference(_lastDataAt).inMinutes >= 5) {
+        DateTime.now().difference(_lastDataAt).inMinutes >= 3) {
       _linkLostBuzzed = true;
+      return true;
+    }
+    return false;
+  }
+
+  /// 分钟级空洞预警：90 秒没新数就打一条日志（节流 60 秒），
+  /// 让"23:32→23:25 这种 7 分钟空洞"在发生 90 秒后就被看见，
+  /// 而不是等用户翻列表才发现。返回 true = 刚预警（调用方可刷新页面）。
+  bool checkDataGap() {
+    final gap = DateTime.now().difference(_lastDataAt);
+    if (gap.inSeconds >= 90 &&
+        DateTime.now().difference(_lastGapWarnAt).inSeconds >= 60) {
+      _lastGapWarnAt = DateTime.now();
+      _log('没新数 ${gap.inMinutes}分${gap.inSeconds % 60}秒了（发射器每分钟广播一次；'
+          '先看手机离发射器远不远、微泰官方App杀了没）');
       return true;
     }
     return false;

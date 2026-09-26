@@ -33,6 +33,10 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   String _statusText = '就绪';
   List<String> _log = [];
   final List<StreamSubscription> _subs = [];
+  // 分钟级断流盯防：页面开着时每 30 秒查一次 manager，没新数就打日志、
+  // 3 分钟报断链。之前 checkLinkLost/checkDataGap 写了但没人调——
+  // 这就是"23:32→23:25 七分钟空洞"全程静默无感知的病根。
+  Timer? _gapTimer;
 
   @override
   void initState() {
@@ -42,6 +46,17 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     _manager.onBackfilled = (_) {
       if (mounted) _reloadFromDb();
     };
+    // 页面开着就盯着：30 秒查一次，空洞 90 秒被看见、3 分钟报断链
+    _gapTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) return;
+      _manager.checkDataGap(); // 日志在 logStream 里，页面自动显示
+      if (_manager.checkLinkLost()) {
+        _log.add('断链提醒：3 分钟没新数了，自动重扫一次…');
+        if (_log.length > 50) _log.removeAt(0);
+        _manager.startScan(quiet: true);
+      }
+    });
     // manager 是单例常驻：先铺内存缓存，再从数据库补（App 重启也不丢）
     _readings = List.of(_manager.history);
     _reloadFromDb();
@@ -147,6 +162,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   void dispose() {
     // 只取消页面自己的订阅，不关 manager：监听在后台继续跑，
     // 切回来从 manager.history 恢复显示。App 退出才停（见 disconnect 按钮）。
+    _gapTimer?.cancel(); // 盯防计时器随页面走（manager 常驻，计时器不能留野的）
+    _gapTimer = null;
     _manager.onBackfilled = null; // 补洞回调随页面解绑（manager 常驻，回调不能留野指针）
     WidgetsBinding.instance.removeObserver(_lifecycleObs);
     for (final s in _subs) {
