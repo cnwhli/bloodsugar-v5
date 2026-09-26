@@ -665,7 +665,10 @@ class SibionicsProtocol extends CgmProtocol {
         try {
           await device.disconnect();
         } catch (_) {}
-        return;
+        // 抛出去：调用方计失败次数、走退避。之前静默 return 导致
+        // 调用方以为连上了（打"已连接"、挂断线监听），实际 notify
+        // 从没订阅——这就是截图里"已连接→连接断开→10秒重连"死循环的病根。
+        throw StateError('无FF31/FF32');
       }
       final w = ff32;
       await ff31.setNotifyValue(true);
@@ -870,6 +873,10 @@ class BleCgmManager {
   // 硅基反复连不上时微泰就被连带饿死，这就是"连着连着都没数了"的病根。
   final Map<String, DateTime> _lastConnAttempt = {};
   final Map<String, int> _connFailCount = {};
+  // 重连监听去重：同一设备只挂一个 connectionState listener。
+  // 之前每次广播都挂一个，N个listener各等10秒各连一次——
+  // 同一设备被并发连N次，GATT被挤断，"已连接→断开"死循环。
+  final Set<String> _reconnectArmed = {};
   BluetoothDevice? _connectedDevice;
   BleCgmState _state = BleCgmState.idle;
   final _stateController = StreamController<BleCgmState>.broadcast();
@@ -1325,25 +1332,37 @@ class BleCgmManager {
     _log('已连接 ${device.platformName}');
     // 连接型断流自愈：连上后监听设备连接状态，断了就自动重连，
     // 不用用户手动重连。广播型（AiDEX）不受影响——它本来就不需要连。
+    // 注意：单次订阅，10秒重连计时只记一次。之前每次广播都挂一个
+    // listener，N个listener各等10秒各调一次_runHandleDevice——
+    // 同一设备被并发连N次，GATT直接被挤断，这也是"已连接→断开"循环的帮凶。
     try {
-      device.connectionState.listen((s) async {
-        if (s != BluetoothConnectionState.disconnected) return;
-        if (_connectedDevice?.remoteId != device.remoteId) return; // 已换设备，不管旧的
-        _log('连接断开，10 秒后自动重连 ${device.platformName}…');
-        await Future.delayed(const Duration(seconds: 10));
-        if (_connectedDevice?.remoteId != device.remoteId) return; // 期间用户点了断开/换了设备，停
-        try {
-          await _runHandleDevice(device, protocol);
-          _connFailCount.remove(device.remoteId.toString()); // 重连上清零
-        } catch (e) {
-          _log('自动重连失败：$e（退避后自动再试，不用手动连）');
-          _connFailCount[device.remoteId.toString()] =
-              ((_connFailCount[device.remoteId.toString()] ?? 0) + 1)
-                  .clamp(1, 7);
-          _connectedDevice = null;
-          _connecting.remove(device.remoteId.toString());
-        }
-      });
+      final devId = device.remoteId.toString();
+      if (_reconnectArmed.add(devId)) {
+        device.connectionState.listen((s) async {
+          if (s != BluetoothConnectionState.disconnected) return;
+          if (_connectedDevice?.remoteId != device.remoteId) {
+            _reconnectArmed.remove(devId);
+            return; // 已换设备/用户点了断开，旧监听退役
+          }
+          _log('连接断开，10 秒后自动重连 ${device.platformName}…');
+          await Future.delayed(const Duration(seconds: 10));
+          if (_connectedDevice?.remoteId != device.remoteId) {
+            _reconnectArmed.remove(devId);
+            return; // 期间用户点了断开/换了设备，停
+          }
+          try {
+            await _runHandleDevice(device, protocol);
+            _connFailCount.remove(device.remoteId.toString()); // 重连上清零
+          } catch (e) {
+            _log('自动重连失败：$e（退避后自动再试，不用手动连）');
+            _connFailCount[device.remoteId.toString()] =
+                ((_connFailCount[device.remoteId.toString()] ?? 0) + 1)
+                    .clamp(1, 7);
+            _connectedDevice = null;
+            _connecting.remove(device.remoteId.toString());
+          }
+        });
+      }
     } catch (_) {}
   }
 
@@ -1360,6 +1379,7 @@ class BleCgmManager {
     await _connectedDevice?.disconnect();
     _connectedDevice = null;
     _connecting.clear();
+    _reconnectArmed.clear(); // 用户手动断开：旧监听全部退役，不再自动重连
     _setState(BleCgmState.idle);
     _log('已停止监听');
   }
