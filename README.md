@@ -12,12 +12,14 @@ One app for your phone and your watch — real-time glucose, health vitals, and 
 
 ## 功能 Features
 
-### 📡 CGM 直连 — 微泰 AiDEX 二代
+### 📡 CGM 直连 — 微泰 AiDEX 二代 + 硅基 GS1（一键直连）
 
-- 被动监听 BLE 广播（Service `0x181F` + Nordic `0x0059`），1 分钟 1 个数据点
+- 微泰 AiDEX 二代：被动监听 BLE 广播（Service `0x181F` + Nordic `0x0059`），1 分钟 1 个数据点
+- **硅基 GS1**：连接型直连（Service `5347` + FF31/FF32），连→订阅→认证→出数全自动，日志一步一报
 - 每包携带当前 + 前 2 分钟共 3 个点，漏扫自动补洞，断线不断史
 - 分钟序号 + 发射器双重去重，换发射器不丢不断；本地主存 mg/dL 整数
 - **连不上自诊断**：从"附近"到"入库"每步失败都写人话日志（无厂家数据/CRC坏包/valid=0/官方App抢连/信号dBm），60秒节流不刷屏
+- **前后台不断链**：后台服务在跑时前台只复用不重启扫描；切后台/锁屏照样收，回来自动补列表
 
 ### ⌚ 手表端 — 为 OPPO Watch X 而生
 
