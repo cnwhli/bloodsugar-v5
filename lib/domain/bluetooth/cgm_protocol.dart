@@ -1279,19 +1279,16 @@ class BleCgmManager {
   }
 
   /// 开始扫描 CGM 设备（前台持续监听，点"断开"才停）。
-  /// 注意：主 isolate 的 startScan 与后台 isolate 的常驻扫描**不能并存**——
-  /// flutter_blue_plus 新版 startScan 前会先 _stopScan() 停掉已有扫描
-  /// （见 fbp 1.36.8 src/flutter_blue_plus.dart startScan：already scanning → stop existing scan），
-  /// 而停止是**进程级**的：主 isolate 点开始监听，会把后台 isolate 的扫描一起停掉，
-  /// 后台 onStart 里挂的 _sub 从此收不到广播——"手表一进页面就断、灭屏才有数"的病根。
-  /// 所以：后台服务在跑时，前台只挂 _attachListener 收广播，不调平台 startScan
-  /// （_attachListener 已用 ??= 防重挂；scanResults 是 isolate 内广播流，不调
-  /// startScan 也能收到后台 isolate 触发的平台扫描结果——同一进程共享蓝牙栈）。
+  /// 扫描永远在主 isolate 跑：后台服务只做保活（wake lock+常驻通知），
+  /// 不做 BLE 扫描（后台 isolate 的 MethodChannel 没注册，扫了也白扫）。
+  /// 之前后台在跑时前台跳过平台扫描只挂监听，结果切后台后两边都没在扫——
+  /// 这就是"一切后台就断"的病根，已改：前台永远自己起扫描，后台只保活。
   /// 返回 null = 权限/蓝牙就绪；返回字符串 = 失败原因（已同时写日志）
   /// quiet=true：后台切回前台自动续扫时用，不重复刷"开始监听"日志
   /// 前台扫描标记：App 从后台切回前台时，若标记为 true 且系统停了扫，自动续扫
   /// 后台服务运行标记：由 CgmForegroundService.start/stop 置位（经 setBackgroundRunning
-  /// 注入，避免 protocol 层 import UI 层）。为 true 时 startScan 只挂监听不碰平台扫描。
+  /// 注入，避免 protocol 层 import UI 层）。为 true 时仅在日志里说明后台在保活，
+  /// 平台扫描照常由前台发起，不跳过。
   bool foregroundScanActive = false;
   static bool backgroundRunning = false;
   Future<String?> startScan({bool quiet = false}) async {
@@ -1305,16 +1302,15 @@ class BleCgmManager {
       _log('开始监听…（AiDEX/微泰二代广播自动收数，无需配对）');
       _log('注意：微泰官方 App 会独占发射器——扫之前先杀掉它');
     }
-    if (backgroundRunning) {
-      // 后台服务正扫着：只挂监听，不调平台 startScan（调了会把后台的停掉）
-      _attachListener();
-      if (!quiet) _log('后台服务正在监听，直接复用，不重启扫描');
-      _startScanWatchdog(); // 保活：后台被杀时前台能自动拉起
-      return null;
+    if (backgroundRunning && !quiet) {
+      _log('后台服务在保活（防杀），扫描由前台发起');
     }
 
     // AiDEX 是被动广播：持续监听，不设 timeout，点"断开"才停。
     // 数值每分钟变一次（minFromStart 递增即新数据）。
+    // 注意：前后台互斥的老写法（后台在跑时前台跳过平台扫描）已删——
+    // 后台 isolate 根本扫不到，切后台后两边都没在扫，这就是"一切后台就断"。
+    // 现在前台永远自己起扫描，后台只保活进程不碰扫描。
     await _detachListener();
     try {
       _attachListener();
@@ -1400,15 +1396,12 @@ class BleCgmManager {
   }
 
   /// 断开/停止：停省电轮询 + 停扫描 + 断 GATT。切页面不调这个，只有点"断开"和退出才调。
-  /// 注意：不断后台服务（前台服务由"断开"按钮经 CgmForegroundService.stop 另行停，
-  /// 这里只停前台自己的扫描，避免误杀后台收数）。
+  /// 前台服务由"断开"按钮经 CgmForegroundService.stop 另行停（只做保活，不碰扫描）。
   Future<void> disconnect() async {
     foregroundScanActive = false;
     _stopScanWatchdog();
     await stopLowPowerWatch();
-    if (!backgroundRunning) {
-      await _detachListener();
-    }
+    await _detachListener();
     await _connectedDevice?.disconnect();
     _connectedDevice = null;
     _connecting.clear();

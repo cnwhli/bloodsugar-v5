@@ -3,9 +3,6 @@ import 'dart:async';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../data/datasource/local_db.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
-import '../../services/alert_service.dart';
-import '../../services/bg_sync.dart';
-import '../../services/health_bridge.dart';
 
 /// 后台收数前台服务入口（独立 isolate，App 退后台/锁屏也跑）
 @pragma('vm:entry-point')
@@ -14,38 +11,20 @@ void cgmBackgroundEntryPoint() {
 }
 
 class CgmBackgroundHandler extends TaskHandler {
-  BleCgmManager? _m;
   StreamSubscription? _sub;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    _m = BleCgmManager();
     await AppDatabase.init();
-    // 注意：这里不要 ensureAuth/弹授权框。后台 isolate 直接 requestAuthorization
-    // 会抛 MissingPluginException（health 插件的 MethodChannel 在后台 engine 没注册），
-    // onStart 直接崩 → 服务秒死 → \"手表灭屏就断\"。
-    // HealthBridge.writeGlucose 内部已 try-catch，失败只跳过写平台，不影响入库。
-    // 前台 isolate（手表页/蓝牙页）该授的权都授过，后台只管收数入库。
-    // 后台只做三件事：收数 → 入库 + 同步写系统健康平台（供手表官方表盘读）
-    // + 通知主 isolate 刷新 UI（后台与主 isolate 的 readingStream 不互通，
-    // 不 sendDataToMain 主 isolate 永远不知道有新数——"退后台就断"的病根之二）。
-    _sub = _m!.readingStream.listen((r) async {
-      try {
-        await AppDatabase.instance.insertReadingDedup(r);
-        await HealthBridge.writeGlucose(r.valueMmolL, r.timestamp);
-        await AlertService().check(r.valueMmolL);
-        // BgSync 发 mmol/L（主 isolate 按时间戳+数值去重，与序号无关）。
-        // 后台 isolate 的 reading 带 minFromStart，入库走序号去重；
-        // 主 isolate 收到后走 45 秒同值去重——两个窗口不打架。
-        // v3：seq+sensorId 一起透过来（BgSync.encode），主 isolate 重建
-        // reading 时带上 minFromStart+sensorId，判重与前台同口径。
-        FlutterForegroundTask.sendDataToMain(BgSync.encode(r.valueMmolL,
-            r.trend, r.timestamp, r.minFromStart, r.sensorId));
-      } catch (_) {}
-    });
-    // 后台用省电模式：扫 15 秒、停 45 秒（发射器 1 分钟广播一次，不漏数）。
-    // checkPermission:false——后台弹不出授权框，前台点扫描时已授过权。
-    await _m!.startLowPowerWatch(checkPermission: false);
+    // 注意：后台 isolate 里不做 BLE 扫描，只保活 + 刷新通知。
+    // 之前后台 isolate 里起 startLowPowerWatch，但 flutter_blue_plus 的
+    // MethodChannel 在后台 isolate 没注册，startScan 静默抛异常（被 catch吞掉），
+    // 后台根本扫不到；同时前台 startScan 见 backgroundRunning=true 就跳过平台扫描、
+    // 只挂监听——结果切后台后两边都没在扫，这就是"一切后台就断"的病根。
+    // 修法：扫描永远归主 isolate（前台页点的开始监听），后台服务只负责
+    // 拿 wake lock + 常驻通知把进程保住，主 isolate 的扫描在后台继续跑。
+    // 后台与主 isolate 的 readingStream 不互通，之前靠 sendDataToMain 补，
+    // 现在后台不收数，主 isolate 直接入库+UI，不需要这条桥（BgSync 保留给兼容）。
   }
 
   @override
@@ -65,7 +44,6 @@ class CgmBackgroundHandler extends TaskHandler {
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     await _sub?.cancel();
-    await _m?.stopLowPowerWatch();
   }
 }
 
