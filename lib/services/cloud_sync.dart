@@ -295,6 +295,28 @@ class CloudSync {
   }
 
   // ---------------- 上传（单条，失败吞掉等整量同步补） ----------------
+  //
+  // 云端 id 带设备后缀（r_<device>_<localId>）：手机/手表本地自增 id
+  // 都会从 1 开始，不带后缀两端同 id 互相覆盖——"实时同步做不到"的帮凶之一。
+  static String? _deviceIdCache;
+  static Future<String> _deviceId() async {
+    try {
+      if (_deviceIdCache != null && _deviceIdCache!.isNotEmpty) {
+        return _deviceIdCache!;
+      }
+      final prefs = await SharedPreferences.getInstance();
+      var id = prefs.getString('device_id');
+      if (id == null || id.isEmpty) {
+        id =
+            '${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}${(DateTime.now().microsecond % 1296).toRadixString(36)}';
+        await prefs.setString('device_id', id);
+      }
+      _deviceIdCache = id;
+      return id;
+    } catch (_) {
+      return 'x';
+    }
+  }
 
   static Future<void> pushReading({
     required int localId,
@@ -308,8 +330,9 @@ class CloudSync {
   }) async {
     if (!_ready || !loggedIn) return;
     try {
+      final dev = await _deviceId();
       await _c.from('cloud_readings').upsert({
-        'id': 'r$localId',
+        'id': 'r${dev}_$localId',
         'user_id': uid,
         'mmol_l': mmolL,
         'mg_dl': (mmolL * 18.0182).round(),
@@ -335,8 +358,9 @@ class CloudSync {
   }) async {
     if (!_ready || !loggedIn) return;
     try {
+      final dev = await _deviceId();
       await _c.from('cloud_vitals').upsert({
-        'id': 'v$localId',
+        'id': 'v${dev}_$localId',
         'user_id': uid,
         'kind': kind,
         'value1': value1,
@@ -360,8 +384,9 @@ class CloudSync {
   }) async {
     if (!_ready || !loggedIn) return;
     try {
+      final dev = await _deviceId();
       await _c.from('cloud_treatments').upsert({
-        'id': 't$localId',
+        'id': 't${dev}_$localId',
         'user_id': uid,
         'type': type,
         'detail': detail,
@@ -465,16 +490,22 @@ class CloudSync {
   /// onVital: 收到对方身体指标 (kind, value1, isoTime)
   /// 订阅前确保 Replication 已加三表（见 supabase_schema.sql 第 5 节），
   /// 没加时订阅连上但收不到 INSERT，不报错——后台 SQL 执行完重进 App 即可。
+  /// 回调带发射器身份（sensorId/brand）：品牌页回调只刷新 UI，真实
+  /// GlucoseReading（含 sensorId/minFromStart）由 importReadingEx 重建，
+  /// 分页/去重按发射器走，不再把对方的数吞成"云端未知"。
   static RealtimeChannel? _ch;
+  // 订阅是否在线（连上/断开打日志，页面可从 logStream 看到）。
+  static bool realtimeOnline = false;
   static Future<void> subscribeRealtime({
-    void Function(double mmolL, int trend, DateTime ts)? onGlucose,
+    void Function(double mmolL, int trend, DateTime ts, String sensorId,
+            String brand)?
+        onGlucose,
     void Function(String kind, double? v1, double? v2, String unit, DateTime ts)?
         onVital,
   }) async {
     if (!_ready || !loggedIn) return;
     try {
       await _ch?.unsubscribe();
-      final me = uid;
       _ch = _c.channel('device-sync');
       _ch!
           .onPostgresChanges(
@@ -484,21 +515,25 @@ class CloudSync {
             callback: (payload) async {
               try {
                 final m = payload.newRecord;
-                if (m['user_id'] == me) {
-                  // 自己上传的不回环（本机已有，判重也会吞，但少一次库操作）
-                  return;
-                }
+                // 同一账号双端：不再按 user_id 回环过滤——手机和手表就是
+                // 同一个 user，各自上传的 id 现已带设备后缀，互相覆盖不了。
+                // 同设备重复推送（本机刚 upsert 又被回环）靠本地判重吞掉。
                 final mmol = (m['mmol_l'] as num?)?.toDouble() ?? 0;
                 if (mmol <= 0) return;
                 final ts = DateTime.parse('${m['measured_at']}').toLocal();
+                final sensorId = '${m['sensor_id'] ?? ''}';
+                final brand = '${m['brand'] ?? '云端'}';
+                final seq = (m['seq'] as num?)?.toInt();
+                final trend = (m['trend'] as num?)?.toInt() ?? 0;
                 await AppDatabase.init();
-                await AppDatabase.instance.importReading(
+                await AppDatabase.instance.importReadingEx(
                   mmolL: mmol,
                   timestamp: ts,
-                  brand: '${m['brand'] ?? '云端'}',
+                  brand: brand,
+                  sensorId: sensorId,
+                  seq: seq,
                 );
-                onGlucose?.call(
-                    mmol, (m['trend'] as num?)?.toInt() ?? 0, ts);
+                onGlucose?.call(mmol, trend, ts, sensorId, brand);
               } catch (_) {}
             },
           )
@@ -509,7 +544,7 @@ class CloudSync {
             callback: (payload) async {
               try {
                 final m = payload.newRecord;
-                if (m['user_id'] == me) return;
+                // 同上：同一账号双端互通，不再按 user_id 回环过滤
                 final ts = DateTime.parse('${m['measured_at']}').toLocal();
                 await AppDatabase.init();
                 await AppDatabase.instance.insertVital(
@@ -528,7 +563,13 @@ class CloudSync {
               } catch (_) {}
             },
           )
-          .subscribe();
+          .subscribe(
+            // 订阅状态回调：连上/断开打标记，页面可从 realtimeOnline 判断
+            // "同步没反应"是没登录、没加 Replication，还是单纯断网。
+            (status, [_]) {
+              realtimeOnline = status == RealtimeSubscribeStatus.subscribed;
+            },
+          );
     } catch (_) {}
   }
 
@@ -537,5 +578,6 @@ class CloudSync {
       await _ch?.unsubscribe();
     } catch (_) {}
     _ch = null;
+    realtimeOnline = false;
   }
 }

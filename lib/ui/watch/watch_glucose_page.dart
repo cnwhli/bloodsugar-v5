@@ -10,7 +10,8 @@ import '../../services/health_bridge.dart';
 import '../../services/cloud_sync.dart';
 import '../../services/watch_sensors.dart';
 import '../ble/cgm_foreground_service.dart';
-import '../watch/multi_watch_arch.dart';
+import '../watch/multi_watch_arch.dart'
+    hide CgmBrand, CgmBrandManager; // 旧手表架构占位枚举（和真协议同名，隐藏掉）
 
 /// 手表端血糖页面（OPPO Watch X 优先，同时手机可预览）
 /// 支持圆形/方形屏幕自适应
@@ -84,6 +85,32 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   int get _pageCount => (_devKeys.isEmpty ? 1 : _devKeys.length) + 2;
   String _devKeyOf(String brand, String sensor) =>
       sensor.isEmpty ? brand : '$brand · $sensor';
+  // 已用天数：只有分钟序号口径的品牌才算（微泰 AiDEX 全系：广播
+  // minFromStart 就是启动分钟数）。硅基 seq 非分钟口径不算，返回 null
+  // 不显示——瞎报一天比不报更坏。
+  int? _useDaysOf(String brandName, int? seq) {
+    if (seq == null || seq < 0) return null;
+    final b = brandName.toLowerCase();
+    final isAidex = b.contains('aidex') ||
+        b.contains('aidexx') ||
+        b.contains('aidexlinx') ||
+        b.contains('microtech');
+    if (!isAidex) return null;
+    return seq ~/ 1440;
+  }
+  // 库里 brand 是显示名（如"微泰 AiDEX 二代"），反查回 CgmBrand.name
+  // 给 _useDaysOf 判分钟口径用；查不到原样返回（中文名也含 aidex 关键字时
+  // _useDaysOf 照样认，不误杀）。
+  // 注意：multi_watch_arch.dart 里有个同名旧 CgmBrand（手表架构占位，
+  // 已在 import 里 hide 掉），这里用的是真协议枚举，别用错。
+  String _brandNameOf(String label) {
+    try {
+      for (final b in CgmBrand.values) {
+        if (b.displayName == label) return b.name;
+      }
+    } catch (_) {}
+    return label;
+  }
   // 图例/行内短名：只留发射器尾段（如 22FJV7J），防圆屏挤爆
   String _shortDev(String dev) {
     final i = dev.indexOf('·');
@@ -153,7 +180,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         // 按设备归档：哪个发射器的数进哪个数值页
         final key = _devKeyOf(r.brandLabel, r.sensorId);
         _devs[key] = _Dev(r.valueMmolL, r.trend, r.brandLabel,
-            r.timestamp);
+            r.timestamp, _useDaysOf(r.brand.name, r.minFromStart));
         _hist.add(_Pt(r.valueMmolL, r.timestamp, key));
         if (_hist.length > 500) {
           _hist = _hist.sublist(_hist.length - 500);
@@ -202,10 +229,55 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       } catch (_) {}
     }));
     setState(() => _scanState = _manager.state.toString().split('.').last);
+    // 手机→手表下行：登录后订阅 Realtime，手机收的数秒级到手表入库+
+    // 归到对应设备页。之前手表只订阅了「上传」，没订阅「下行」——
+    // 这就是"手机手表做不到实时同步"的病根之二。
+    _startWatchCloudSub();
     // 断链看门狗：每分钟查一次，5 分钟没新数 → 长震提醒 + 自动重连。
     // 灭屏被杀后开屏进来就能发现，不用用户猜“是不是断了”。
     _linkWatchdog =
         Timer.periodic(const Duration(minutes: 1), (_) => _checkLink());
+  }
+
+  /// 手表侧 Realtime 下行：手机上传 → 手表秒级入库 + 归设备页 + 刷 UI。
+  /// 登录/配对码登录后调用；重复进 initState 不重复订阅。
+  /// 没登录/断网静默跳过（手表独立直连照样用，不绑死云）。
+  bool _watchSubOn = false;
+  Future<void> _startWatchCloudSub() async {
+    if (_watchSubOn || !CloudSync.isReady || !CloudSync.loggedIn) return;
+    _watchSubOn = true;
+    try {
+      await CloudSync.subscribeRealtime(
+        onGlucose: (mmolL, trend, ts, sensorId, brand) {
+          if (!mounted) return;
+          _lastDataAt = DateTime.now();
+          _linkLostBuzzed = false;
+          setState(() {
+            _mmolL = mmolL;
+            _trend = trend;
+            _updatedAt = ts;
+            _hasData = true;
+            final key = _devKeyOf(brand, sensorId);
+            final old = _devs[key];
+            if (old == null) {
+              _devs[key] = _Dev(mmolL, trend, brand, ts);
+            } else {
+              old.v = mmolL;
+              old.trend = trend;
+              old.ts = ts;
+              old.brand = brand;
+            }
+            _hist.add(_Pt(mmolL, ts, key));
+            if (_hist.length > 500) {
+              _hist = _hist.sublist(_hist.length - 500);
+            }
+          });
+          _buzzForLevel();
+        },
+      );
+    } catch (_) {
+      _watchSubOn = false;
+    }
   }
 
   /// 断链检查：监听开着但 5 分钟没数 → 震动 + 自动重扫一次。
@@ -246,12 +318,15 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   }
 
   /// 抬腕/回前台：血糖从库补最新（含历史），运动三件套刷一次——
-  /// 手表表盘的"抬腕显示"本质就是 resumed 时立刻有数，不转菊花
+  /// 手表表盘的"抬腕显示"本质就是 resumed 时立刻有数，不转菊花。
+  /// 顺手把云下行订阅补上：配对码登录是进页面之后才发生的，
+  /// initState 那次订阅多半因"没登录"被跳过，回来必须重试。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _loadLocal();
       _loadSport();
+      _startWatchCloudSub();
     }
   }
 
@@ -380,9 +455,14 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           final key = _devKeyOf(brand, sensor);
           pts.add(_Pt(v, t, key));
           final tr = (m['trend'] as num?)?.toInt() ?? 0;
+          // 已用天数从库里seq回算（云下行的数seq也入库了，本机/云端一致）
+          final seq = (m['min_from_start'] as num?)?.toInt();
+          final days = _useDaysOf(_brandNameOf(brand), seq);
           final old = devLatest[key];
           if (old == null || t.isAfter(old.ts)) {
-            devLatest[key] = _Dev(v, tr, brand, t);
+            devLatest[key] = _Dev(v, tr, brand, t, days);
+          } else if (days != null) {
+            old.useDays = days; // 同页更老的行也可能带更新的seq
           }
         }
       }
@@ -749,6 +829,21 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
+        // 已用天数（微泰分钟口径才有；硅基不显示，免得瞎报）。
+        // 只提醒不锁死：到期停播是发射器自己停的，App 侧继续收。
+        if (d.useDays != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              d.useDays! >= 14
+                  ? '已用 ${d.useDays} 天（到期附近，数值勤对照指血）'
+                  : '已用 ${d.useDays} 天',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: small,
+                  color: d.useDays! >= 14 ? Colors.orange : Colors.grey),
+            ),
+          ),
         const SizedBox(height: 8),
         // 心率/步数卡片（和旧数值页一致，抬腕一眼全）
         Container(
@@ -1244,13 +1339,16 @@ class _Pt {
   _Pt(this.v, this.t, [this.dev = '']);
 }
 
-/// 单设备快照（数值页一页一个：值/趋势/品牌/时间）
+/// 单设备快照（数值页一页一个：值/趋势/品牌/时间 + 已用天数）
 class _Dev {
   double v;
   int trend;
   String brand;
   DateTime ts;
-  _Dev(this.v, this.trend, this.brand, this.ts);
+  // 发射器已用天数（微泰分钟序号/60/24 取整；硅基 seq 非分钟口径时为 null
+  // 不显示，免得瞎报。到期停播前心里有数，不锁死只提醒）。
+  int? useDays;
+  _Dev(this.v, this.trend, this.brand, this.ts, [this.useDays]);
 }
 
 /// 火花线：血糖曲线 + 3.9/10.0 阈值虚线。

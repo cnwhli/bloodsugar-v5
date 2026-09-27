@@ -63,7 +63,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _cloudSubOn = true;
     try {
       await CloudSync.subscribeRealtime(
-        onGlucose: (mmolL, trend, ts) {
+        onGlucose: (mmolL, trend, ts, sensorId, brand) {
           if (!mounted) return;
           _loadLatest(); // 对方血糖入库了，首页数值+曲线+小组件一起刷
         },

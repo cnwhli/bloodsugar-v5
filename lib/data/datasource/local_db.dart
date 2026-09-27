@@ -336,6 +336,11 @@ class AppDatabase {
   /// CSV 导入单行（官方 App 导出的历史 / 以前的备份，一次性补进来）：
   /// 按（时间+数值）判重，重复导入不翻倍。无序号（source='csv'），
   /// 不进唯一索引冲突（SQLite 唯一索引允许多个 NULL）。
+  ///
+  /// 云同步下行专用 importReadingEx：对方（另一台设备）传来的数带
+  /// 发射器身份（sensorId/seq），按原身份入库——分页/去重口径和本机
+  /// 收的一致（source='cloud' 只标记来源，品牌/sensorId 原样保留，
+  /// 不再写死"云端"导致手表页分不出是谁的数）。
   Future<bool> importReading({
     required double mmolL,
     required DateTime timestamp,
@@ -366,7 +371,64 @@ class AppDatabase {
     }
   }
 
-  /// 最近 N 条
+  Future<bool> importReadingEx({
+    required double mmolL,
+    required DateTime timestamp,
+    String brand = '云端',
+    String sensorId = '',
+    int? seq,
+  }) async {
+    try {
+      if (mmolL <= 0 || mmolL > 45) return false;
+      final ts = _fmtTs(timestamp);
+      final mg = (mmolL * 18.0182).round();
+      // 有发射器序号：按（序号, 发射器）判重，和本机 BLE 入库同口径
+      if (seq != null) {
+        final dup = await _db!.query(
+          'glucose_readings',
+          where: 'min_from_start = ? AND COALESCE(sensor_id, \'\') = ?',
+          whereArgs: [seq, sensorId],
+          limit: 1,
+        );
+        if (dup.isNotEmpty) return false;
+        await _db!.insert('glucose_readings', {
+          'value_mg_dl': mg,
+          'value_mmol_l': mg / 18.0182,
+          'trend': 0,
+          'brand': brand,
+          'sensor_id': sensorId,
+          'min_from_start': seq,
+          'source': 'ble',
+          'created_at': ts,
+        });
+        return true;
+      }
+      // 无序号：按（时间+数值+品牌+发射器）判重，同一分钟两台设备的
+      // 同值点不再互吞（硅基 6.0 和微泰 6.0 同分钟也能各存一条）
+      final dup = await _db!.query(
+        'glucose_readings',
+        where:
+            'created_at = ? AND value_mg_dl = ? AND brand = ? AND COALESCE(sensor_id, \'\') = ?',
+        whereArgs: [ts, mg, brand, sensorId],
+        limit: 1,
+      );
+      if (dup.isNotEmpty) return false;
+      await _db!.insert('glucose_readings', {
+        'value_mg_dl': mg,
+        'value_mmol_l': mg / 18.0182,
+        'trend': 0,
+        'brand': brand,
+        'sensor_id': sensorId,
+        'source': 'ble',
+        'created_at': ts,
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 最近 N 条血糖
   Future<List<Map<String, dynamic>>> recentReadings({int limit = 100}) async {
     return _db!.query(
       'glucose_readings',
@@ -576,7 +638,7 @@ class AppDatabase {
     });
   }
 
-  /// 最近 N 条治疗记录（首页"今日记录" + 记录页列表用）
+  /// 最近 N 条血糖治疗记录（首页"今日记录" + 记录页列表用）
   Future<List<Map<String, dynamic>>> recentTreatments(
       {int limit = 50}) async {
     return _db!.query(

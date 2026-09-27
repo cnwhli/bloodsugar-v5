@@ -547,6 +547,27 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   // ---- 血糖列表按设备分页：几个发射器就几个 Tab，各看各的、好对比 ----
   // 之前是 ExpansionTile 分组堆一页，两个设备混一起看不出谁是谁。
   // 现在 TabBar 一个设备一页（2 个设备 2 页，3 个 3 页），Tab 标签带最新值。
+  // 页头带"已用 X 天"（微泰分钟口径才有；硅基不显示）：到期进度一眼有数。
+  //
+  // 已用天数：只对分钟序号口径的品牌算（微泰 AiDEX 全系广播 minFromStart
+  // 就是启动分钟数，/1440 取整；组里取最大 seq，补洞旧点不拉低天数）。
+  // 硅基 seq 非分钟口径返回 null 不显示——瞎报一天比不报更坏。
+  int? _useDaysOf(List<GlucoseReading> items) {
+    if (items.isEmpty) return null;
+    final b0 = items.first.brand.name.toLowerCase();
+    final isAidex = b0.contains('aidex') ||
+        b0.contains('aidexlinx') ||
+        b0.contains('microtech');
+    if (!isAidex) return null;
+    var maxSeq = -1;
+    for (final r in items) {
+      final s = r.minFromStart;
+      if (s != null && s > maxSeq) maxSeq = s;
+    }
+    if (maxSeq < 0) return null;
+    return maxSeq ~/ 1440;
+  }
+
   Widget _buildGroupedList() {
     // 分组 key：sensorId 有就用（微泰后6位/AAC…），没有按品牌分
     final groups = <String, List<GlucoseReading>>{};
@@ -592,12 +613,19 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                   itemCount: shown.length + 1,
                   itemBuilder: (context, i) {
                     if (i == 0) {
-                      // 页头：设备全名 + 点数，防 Tab 标签截断看不清
+                      // 页头：设备全名 + 点数 + 已用天数，防 Tab 标签截断看不清。
+                      // 已用天数只对分钟口径品牌算（微泰全系：minFromStart
+                      // 就是启动分钟数，/1440 取整）；硅基 seq 非分钟口径
+                      // 不算不显示，免得瞎报。
+                      final days = _useDaysOf(items);
+                      final daysTxt = days == null
+                          ? ''
+                          : (days >= 14 ? ' · 已用 $days 天（到期附近）' : ' · 已用 $days 天');
                       return Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 6),
                         child: Text(
-                          '$key · 共 ${items.length} 点',
+                          '$key · 共 ${items.length} 点$daysTxt',
                           style: const TextStyle(
                               fontSize: 12, color: Colors.white54),
                         ),
