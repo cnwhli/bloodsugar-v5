@@ -619,6 +619,9 @@ class SibionicsProtocol extends CgmProtocol {
   /// GS3 账号 ID（bindUser 用，用户从官方 App 取后填设置；null = 走 GS1 免账号流程）
   static int? accountId;
 
+  /// 认证 key 轮换下标：EU → 国行 → 俄版，每次连接 +1（见握手处注释）
+  static int keyIdx = 0;
+
   @override
   CgmBrand get brand => CgmBrand.sibionics;
 
@@ -711,29 +714,32 @@ class SibionicsProtocol extends CgmProtocol {
       final w = ff32;
       await ff31.setNotifyValue(true);
       log('已订阅 FF31（${device.platformName}），写认证包…');
-      // 认证包需 RC4 加密后写出。必须带响应写（withoutResponse:false）：
-      // Juggluco 写 FF32 用的是默认带响应写；之前全用免响应写，
-      // 发射器那边可能根本没收到——"补发也执行了但零回包"的最大嫌疑。
+      // 认证包需 RC4 加密后写出。写类型经三方对照（Juggluco 默认带响应 /
+      // chalimov 用免响应）FF32 两种都支持，用带响应写（withoutResponse:false）。
+      // MAC 取直连目标发射器的 BLE 地址反转（deviceArray，三方一致），不是手机 MAC。
       final mac = device.remoteId.toString();
-      final authPlain = sibAuthPacket(mac);
+      // key 轮换：EU → 国行 → 俄版。国行 GS1 用 GKSHGDU0TYA456G4，
+      // EU 版错了发射器静默丢弃——零回包头号嫌疑。每次连接换下一个 key 试。
+      final appKey =
+          sibAppKeyRotation[SibionicsProtocol.keyIdx % sibAppKeyRotation.length];
+      SibionicsProtocol.keyIdx++;
+      final authPlain = sibAuthPacket(mac, appKey: appKey);
       final authEnc = sibRc4(authPlain);
-      log('认证包明文：${authPlain.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+      log('认证 key：$appKey，包明文：${authPlain.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
       await w.write(authEnc, withoutResponse: false);
       var lastIndex = 0;
       var bound = false;
-      // 分体式（轻享/动感发射器复用）：认证包可能石沉大海，FF31 一直无回包。
-      // 3 秒后没动静就补发一次时间同步+要数据，逼发射器开口——
-      // "握手已发、等待回包"之后全程静默、永远无 glucose/ack 的病根。
+      var activated = false; // ACTIVATE(0x0A07) 发过且收到 0x07 回包
+      // 10 秒无任何回包：换下一个 key 重连再试（key 轮换），而不是原地补发——
+      // key 错了补发多少次都是静默。日志会写"换key重连"。
       var gotReply = false;
-      Future.delayed(const Duration(seconds: 3), () async {
+      Future.delayed(const Duration(seconds: 10), () async {
         if (gotReply) return;
         try {
-          log('FF31 3秒无回包，补发时间同步+要数据（${device.platformName}）…');
-          await w.write(sibRc4(sibTimeSyncPacket()),
-              withoutResponse: true);
-          await Future.delayed(const Duration(milliseconds: 300));
-          await w.write(sibRc4(sibAskDataPacket(1, magic: 0x0806)),
-              withoutResponse: true);
+          log('FF31 10秒无回包，换下一个认证 key 重连（${device.platformName}）…');
+          try {
+            await device.disconnect();
+          } catch (_) {}
         } catch (_) {}
       });
       ff31.onValueReceived.listen((data) async {
@@ -766,12 +772,20 @@ class SibionicsProtocol extends CgmProtocol {
           } catch (_) {}
         } else if (action == 'ack') {
           final raw = (d['raw'] as List).cast<int>();
-          // result==2 → Wrong account ID（GS3 账号不对），提示用户填账号
+          // ACK 5 字节：type=raw[1]，code=raw[2]。
+          // type 0x01=认证：code==1 才算 auth_ok，可以发 ACTIVATE；
+          //   code!=1 = key 不对被拒，断开换下一个 key 重连（key 轮换）。
+          // type 0x07=激活回包 → 发时间同步+要数据（GS1）；
+          // type 0x03=时间回包 → 发要数据。
+          // result==2 → Wrong account ID（GS3 账号不对），提示用户填账号。
           if (raw.length >= 6 && raw[5] == 2 && !bound) {
             log('硅基 GS3：账号 ID 不对，请在设置里填 GS3 账号 ID 后重连');
             return;
           }
-          // 握手推进：先时间同步，再要数据（GS1 免账号流程；GS3 有账号则 bindUser）
+          final ackType = raw.length >= 2 ? raw[1] : -1;
+          final ackCode = raw.length >= 3 ? raw[2] : -1;
+          log('硅基 ACK：type=0x${ackType.toRadixString(16)} code=$ackCode（${device.platformName}）');
+          // 握手推进（GS1 免账号流程；GS3 有账号则 bindUser）
           try {
             final acct = SibionicsProtocol.accountId;
             if (acct != null && !bound) {
@@ -779,7 +793,19 @@ class SibionicsProtocol extends CgmProtocol {
               await w.write(
                   sibRc4(sibBindUserPacket(acct, seq: 1)),
                   withoutResponse: true);
+            } else if (ackType == 0x01 && ackCode != 1) {
+              // 认证被拒：key 不对，断开让重连逻辑换下一个 key
+              log('硅基认证被拒（code=$ackCode），换key重连…');
+              try {
+                await device.disconnect();
+              } catch (_) {}
+            } else if (ackType == 0x01 && !activated) {
+              // 认证通过 → 发 ACTIVATE（0A 07 + 时间 + 1234），等 0x07 回包
+              activated = true;
+              await w.write(sibRc4(sibActivatePacket()),
+                  withoutResponse: true);
             } else {
+              // 激活回包(0x07)/时间回包(0x03)/数据确认(0x08)→时间同步+要数据
               await w.write(sibRc4(sibTimeSyncPacket()),
                   withoutResponse: true);
               await Future.delayed(const Duration(milliseconds: 300));

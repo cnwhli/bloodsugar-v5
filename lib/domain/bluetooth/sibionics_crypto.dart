@@ -17,10 +17,15 @@ const List<int> _rc4Key = [
   0xCD, 0x9E, 0xC3, 0x99, 0x09, 0x37, 0xAA, 0xE8,
 ];
 
-// 三个硬编码 App key（按 siSubtype 选）
-const String sibAppKeySijoy = 'THE544U0TYITE461'; // sijoy / GS3 应用
+// 三个硬编码 App key（按 siSubtype/variant 选，见 Juggluco interpret_data.cpp:getkey）
+// 国行 GS1（sisensingcgm/eco 应用配对）用 china/eco 版——之前默认只发 EU 版，
+// key 错发射器静默丢弃，正是"订阅成功、写入成功、零回包"的最可能根因
+// （三方对照：Juggluco/chalimov/sibionics_cgm_ha/gluco-glance 一致结论）。
+const String sibAppKeySijoy = 'THE544U0TYITE461'; // sijoy / GS3 应用（EU）
 const String sibAppKeyRu = 'LQSS54U0RURUA99J'; // 俄版
-const String sibAppKeyEco = 'GKSHGDU0TYA456G4'; // sisensingcgm/eco
+const String sibAppKeyEco = 'GKSHGDU0TYA456G4'; // 国行 china/eco
+// 认证 key 轮换顺序：EU → 国行 → 俄版
+const List<String> sibAppKeyRotation = [sibAppKeySijoy, sibAppKeyEco, sibAppKeyRu];
 
 /// 标准 RC4（skip=0，加解密同函数）
 List<int> sibRc4(List<int> data) {
@@ -69,6 +74,23 @@ List<int> sibAuthPacket(String mac, {String appKey = sibAppKeySijoy}) {
   final reversed =
       parts.reversed.map((h) => int.parse(h, radix: 16)).toList();
   final head = [0x19, 0x01, 0x00, ...reversed, ...appKey.codeUnits];
+  return [...head, sibChk(head)];
+}
+
+/// 组 11 字节激活包：0A 07 + uint32 LE unix秒 + 1234(u32 LE) + chk。
+/// 顺序来自 chalimov/sibionics_cgm_ha（对照 Juggluco 状态机）：
+/// 认证 ACK(0x01) 后必须先发 ACTIVATE，等回包(0x07) 再发时间同步+要数据。
+/// 之前认证后直接发时间同步+要数据，跳过了激活——这是零回包嫌疑之一。
+/// RC4 加密后写出。
+List<int> sibActivatePacket({int? unixSec}) {
+  final t = unixSec ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+  const magic = 1234;
+  final head = [
+    0x0A, 0x07,
+    t & 0xFF, (t >> 8) & 0xFF, (t >> 16) & 0xFF, (t >> 24) & 0xFF,
+    magic & 0xFF, (magic >> 8) & 0xFF, (magic >> 16) & 0xFF,
+    (magic >> 24) & 0xFF,
+  ];
   return [...head, sibChk(head)];
 }
 
@@ -192,10 +214,11 @@ Map<String, dynamic> sibDispatch(List<int> notify) {
   if (cmd == 0x08) {
     return {'action': 'glucose', 'points': sibParseGs1(plain), 'ver': 0x10};
   }
-  // ACK 包：buf[0]==4 长度语义，buf[4] 校验和 → 上层按 reply_ack_type 状态机回包
-  // （bindUser/deviceInfo/AskNewData/SItime，见 cgm_protocol 接线注释）。
-  // result==2 = Wrong account ID（GS3 账号不对）。
-  if (plain[0] == 0x04 && plain.length >= 6) {
+  // ACK 包：5 字节（buf[0]==4 长度语义，buf[4] 校验和）
+  // 之前条件写 length>=6，把 5 字节 ACK 全漏判成 ignore——
+  // 即使发射器回了认证 ACK，我们也当没看见，这也是零回包的帮凶之一。
+  // type=dec[1]：0x01 认证 / 0x07 激活 / 0x03 时间 / 0x08 数据确认；code=dec[2]。
+  if (plain[0] == 0x04 && plain.length >= 5) {
     return {'action': 'ack', 'raw': plain};
   }
   return {'action': 'ignore'};
