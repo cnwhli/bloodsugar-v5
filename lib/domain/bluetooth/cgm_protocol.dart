@@ -634,7 +634,12 @@ class SibionicsProtocol extends CgmProtocol {
     // 先走 GS1 流程（免账号），收到 Wrong account 再提示用户填。
     try {
       log('连接硅基 ${device.platformName}…');
-      await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
+      // connect 由 manager 建好（_runHandleDevice 先连），这里只做握手，
+      // 不再自己 connect——之前两头各连一次，GATT 被自己挤断（133/147）。
+      if (device.isDisconnected) {
+        await device.connect(
+            autoConnect: false, timeout: const Duration(seconds: 15));
+      }
       try {
         await device.requestMtu(247);
       } catch (_) {}
@@ -674,7 +679,7 @@ class SibionicsProtocol extends CgmProtocol {
         }
       }
       if (ff31 == null || ff32 == null) {
-        log('硅基握手失败：整机无 FF31/FF32（见上行服务一览；'
+        log('硅基握手失败 ${device.platformName}：整机无 FF31/FF32（见上行服务一览；'
             '若只有180A/180F说明发射器未激活或被官方App独占，先杀官方App重连）');
         try {
           await device.disconnect();
@@ -686,7 +691,7 @@ class SibionicsProtocol extends CgmProtocol {
       }
       final w = ff32;
       await ff31.setNotifyValue(true);
-      log('已订阅 FF31，写认证包…');
+      log('已订阅 FF31（${device.platformName}），写认证包…');
       // 认证包需 RC4 加密后写出
       final mac = device.remoteId.toString();
       final authPlain = sibAuthPacket(mac);
@@ -745,9 +750,9 @@ class SibionicsProtocol extends CgmProtocol {
           } catch (_) {}
         }
       });
-      log('硅基握手已发，等待 FF31 回包…（日志会显示 glucose/ack）');
+      log('硅基握手已发（${device.platformName}），等待 FF31 回包…（日志会显示 glucose/ack）');
     } catch (e) {
-      log('硅基连接异常：$e');
+      log('硅基连接异常 ${device.platformName}：$e');
       try {
         await device.disconnect();
       } catch (_) {}
@@ -1463,6 +1468,12 @@ class BleCgmManager {
   /// 首次连和断流重连走同一套，行为一致。
   Future<void> _runHandleDevice(
       BluetoothDevice device, CgmProtocol protocol) async {
+    // manager 先建连（白名单+15秒超时已在 _connectToDevice），协议层只握手。
+    // 之前 connect 建好后协议层又 connect 一次，两头抢 GATT 被挤断（133/147）。
+    if (device.isDisconnected) {
+      await device.connect(autoConnect: false,
+          timeout: const Duration(seconds: 15));
+    }
     await protocol.handleDevice(device, (reading) {
       _emitReading(reading); // 进 history 缓存，切页/重进不丢
     }, _log);

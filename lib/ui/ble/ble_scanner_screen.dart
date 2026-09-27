@@ -305,82 +305,115 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   }
 
   // ---- 手动选设备区： nearby 可连设备多选 + 锁定开关 ----
+  // 默认折叠：只露一行"附近设备（N）+ 展开/锁定"，不占地方；
+  // 之前一上来全展开，几十个蓝牙把血糖列表挤没。
+  bool _pickerOpen = false;
+
   Widget _buildDevicePicker() {
-    if (_seen.isEmpty && !_manualOn) return const SizedBox.shrink();
     final names = _seen.keys.toList()..sort();
+    final locked = _manager.selectedNames;
+    final summary = _manualOn
+        ? '锁定：${locked.join('、')}'
+        : (_seen.isEmpty ? '扫描中…' : '附近 ${_seen.length} 台，未锁定（自动模式）');
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(horizontal: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         border: Border.all(color: Colors.grey[700]!),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              const Text('附近设备（勾选后点锁定，只连选中的）',
-                  style: TextStyle(fontSize: 12, color: Colors.white70)),
-              const Spacer(),
-              TextButton(
-                onPressed: (_picked.isEmpty && !_manualOn)
-                    ? null
-                    : () async {
-                        if (_manualOn && _picked.isEmpty) {
-                          // 已锁定但全取消 = 回自动
-                          await _manager.setSelectedDevices({});
-                          if (!mounted) return;
-                          setState(() {
-                            _manualOn = false;
-                            _picked = {};
-                          });
-                          return;
-                        }
-                        await _manager.setSelectedDevices(_picked);
-                        if (!mounted) return;
-                        setState(() => _manualOn = _picked.isNotEmpty);
-                      },
-                child: Text(_manualOn ? '已锁定（点我改选/全取消回自动）' : '只连选中的'),
+          InkWell(
+            onTap: () => setState(() => _pickerOpen = !_pickerOpen),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('附近设备 · $summary',
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.white70)),
+                  ),
+                  Text(_pickerOpen ? '收起' : '展开',
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.lightBlue)),
+                ],
               ),
-            ],
+            ),
           ),
-          if (_manualOn)
+          if (!_pickerOpen) const SizedBox.shrink(),
+          if (_pickerOpen)
+            Row(
+              children: [
+                const Text('勾选后点锁定，只连选中的',
+                    style:
+                        TextStyle(fontSize: 12, color: Colors.white70)),
+                const Spacer(),
+                TextButton(
+                  onPressed: (_picked.isEmpty && !_manualOn)
+                      ? null
+                      : () async {
+                          if (_manualOn && _picked.isEmpty) {
+                            // 已锁定但全取消 = 回自动
+                            await _manager.setSelectedDevices({});
+                            if (!mounted) return;
+                            setState(() {
+                              _manualOn = false;
+                              _picked = {};
+                            });
+                            return;
+                          }
+                          await _manager.setSelectedDevices(_picked);
+                          if (!mounted) return;
+                          setState(
+                              () => _manualOn = _picked.isNotEmpty);
+                        },
+                  child: Text(_manualOn
+                      ? '已锁定（点我改选/全取消回自动）'
+                      : '只连选中的'),
+                ),
+              ],
+            ),
+          if (_pickerOpen && _manualOn)
             Text('锁定中：${_manager.selectedNames.join('、')}',
                 style: const TextStyle(fontSize: 12, color: Colors.green)),
           // 限高独立滚动：附近蓝牙多时多选区自己滚，不把血糖列表挤没——
           // "下面的内容都显示不了"的另一半病根（manager 侧已限 30 个）
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 180),
-            child: SingleChildScrollView(
-              child: Column(
-                children: names.map((k) {
-                  final d = _seen[k]!;
-                  final checked = _picked.contains(k);
-                  return CheckboxListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('${d.name}（${d.rssi}dBm）',
-                        style: const TextStyle(fontSize: 13)),
-                    subtitle: Text('${d.brandLabel} · ${d.mac}',
-                        style: const TextStyle(
-                            fontSize: 11, color: Colors.white54)),
-                    value: checked,
-                    onChanged: (v) {
-                      setState(() {
-                        if (v == true) {
-                          _picked.add(k);
-                        } else {
-                          _picked.remove(k);
-                        }
-                      });
-                    },
-                  );
-                }).toList(),
+          if (_pickerOpen)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: names.map((k) {
+                    final d = _seen[k]!;
+                    final checked = _picked.contains(k);
+                    return CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('${d.name}（${d.rssi}dBm）',
+                          style: const TextStyle(fontSize: 13)),
+                      subtitle: Text('${d.brandLabel} · ${d.mac}',
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.white54)),
+                      value: checked,
+                      onChanged: (v) {
+                        setState(() {
+                          if (v == true) {
+                            _picked.add(k);
+                          } else {
+                            _picked.remove(k);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
