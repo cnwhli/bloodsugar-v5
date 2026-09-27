@@ -36,7 +36,9 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   // 手动选设备：扫到的可连设备多选 + 白名单开关（默认自动模式见谁连谁）
   Set<String> _picked = {}; // 页面勾选（大写名）；点"只连选中的"才生效
   Map<String, SeenDevice> _seen = {};
-  bool _manualOn = false; // 仅 initState 回读用；显示一律以 manager 白名单为准
+  // 数据源选择（对标码农xDrip"您使用哪个系统"）：品牌多选，默认全开
+  Set<String> _pickedBrands = {};
+  bool _brandOpen = false;
   // 分钟级断流盯防：页面开着时每 30 秒查一次 manager，没新数就打日志、
   // 3 分钟报断链。之前 checkLinkLost/checkDataGap 写了但没人调——
   // 这就是"23:32→23:25 七分钟空洞"全程静默无感知的病根。
@@ -68,10 +70,14 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     _manager.loadSelectedDevices().then((_) {
       if (!mounted) return;
       setState(() {
-        _manualOn = _manager.isManualSelect;
         _picked = Set.of(_manager.selectedNames);
         _seen = Map.of(_manager.seenDevices);
       });
+    });
+    // 数据源选择：读回上次选的品牌
+    _manager.loadSelectedBrands().then((_) {
+      if (!mounted) return;
+      setState(() => _pickedBrands = Set.of(_manager.selectedBrands));
     });
     _subs.add(_manager.seenDevicesStream.listen((_) {
       if (!mounted) return;
@@ -373,7 +379,6 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                           }
                           if (!mounted) return;
                           setState(() {
-                            _manualOn = _manager.isManualSelect;
                             _picked = Set.of(_manager.selectedNames);
                             _seen = Map.of(_manager.seenDevices);
                           });
@@ -412,6 +417,120 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                             _picked.add(k);
                           } else {
                             _picked.remove(k);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ---- 数据源选择：对标码农xDrip"您使用哪个系统" ----
+  // 默认折叠只露一行；点开多选品牌（微泰/硅基/三诺/欧态…），
+  // 只跑选中的协议：181F 复用品牌不再误认，附近列表也清爽。
+  // 全取消 = 全开自动识别。
+  static const _brandOptions = [
+    ['aidexX', '微泰 AiDEX 二代'],
+    ['sibionics', '硅基 GS1/GS3'],
+    ['aidexLinX', '微泰 LinX 分体式'],
+    ['sinocareICan', '三诺爱看 iCan'],
+    ['ottaiM8', '欧态 M8'],
+    ['libre2', 'Libre 2'],
+    ['libre3', 'Libre 3'],
+    ['dexcomG6', 'Dexcom G6'],
+    ['dexcomG7', 'Dexcom G7'],
+    ['accuSmartGuide', 'Accu-Chek'],
+    ['medtronicGuardian4', 'Medtronic Guardian 4'],
+    ['medtronicSimplera', 'Medtronic Simplera'],
+  ];
+
+  Widget _buildBrandPicker() {
+    final selected = _manager.selectedBrands;
+    final summary = selected.isEmpty
+        ? '全部品牌自动识别'
+        : '只收：${selected.join('、')}';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey[700]!),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _brandOpen = !_brandOpen),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('数据源 · $summary',
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.white70)),
+                  ),
+                  Text(_brandOpen ? '收起' : '展开',
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.lightBlue)),
+                ],
+              ),
+            ),
+          ),
+          if (!_brandOpen) const SizedBox.shrink(),
+          if (_brandOpen)
+            Row(
+              children: [
+                const Text('勾选您使用的系统，只收这几家',
+                    style:
+                        TextStyle(fontSize: 12, color: Colors.white70)),
+                const Spacer(),
+                TextButton(
+                  onPressed: (_pickedBrands.isEmpty && selected.isEmpty)
+                      ? null
+                      : () async {
+                          if (_pickedBrands.isEmpty) {
+                            await _manager.setSelectedBrands({});
+                          } else {
+                            await _manager
+                                .setSelectedBrands(_pickedBrands);
+                          }
+                          if (!mounted) return;
+                          setState(() => _pickedBrands =
+                              Set.of(_manager.selectedBrands));
+                        },
+                  child: Text(selected.isEmpty
+                      ? '只收选中的'
+                      : '已选（点我改选/全取消回全开）'),
+                ),
+              ],
+            ),
+          if (_brandOpen)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 200),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: _brandOptions.map((b) {
+                    final checked = _pickedBrands.contains(b[0]);
+                    return CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(b[1],
+                          style: const TextStyle(fontSize: 13)),
+                      value: checked,
+                      onChanged: (v) {
+                        setState(() {
+                          if (v == true) {
+                            _pickedBrands.add(b[0]);
+                          } else {
+                            _pickedBrands.remove(b[0]);
                           }
                         });
                       },
@@ -624,6 +743,9 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
               ],
             ),
           ),
+          // 数据源选择（对标码农xDrip"您使用哪个系统"）：先选品牌再选设备
+          _buildBrandPicker(),
+          const SizedBox(height: 4),
           // 手动选设备区：扫到的可连设备多选，"只连选中的"锁定
           _buildDevicePicker(),
           // 最近读数（按设备分组：微泰/硅基各看各的，不再混一条线）

@@ -976,6 +976,44 @@ class BleCgmManager {
         : '已锁定设备：${_selectedNames.join('、')}（别的只看不连）');
   }
 
+  // ---- 数据源选择（对标码农xDrip"选择数据源/您使用哪个系统"）----
+  // 空 = 全部品牌自动识别；非空 = 只跑选中的品牌协议，别的广播直接跳过。
+  // 作用：① 181F 复用的品牌（微泰/三诺/欧态/Accu）不再互相误认；
+  // ② 不用的协议不跑，省射频省电；③ 附近设备列表只显示选中品牌，清爽。
+  static const _kSelectedBrands = 'ble_selected_brands';
+  Set<String> _selectedBrands = {}; // CgmBrand.name；空 = 全部
+
+  /// 选中的品牌（name）。空 = 自动模式全开。
+  Set<String> get selectedBrands => Set.unmodifiable(_selectedBrands);
+
+  bool get isBrandFiltered => _selectedBrands.isNotEmpty;
+
+  /// 某协议是否被数据源选中
+  bool brandEnabled(CgmBrand b) =>
+      _selectedBrands.isEmpty || _selectedBrands.contains(b.name);
+
+  Future<void> loadSelectedBrands() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _selectedBrands = (prefs.getStringList(_kSelectedBrands) ?? const [])
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toSet();
+    } catch (_) {}
+  }
+
+  /// 设数据源（页面多选后调）。传空 = 回全开自动模式。
+  Future<void> setSelectedBrands(Set<String> names) async {
+    _selectedBrands = names.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_kSelectedBrands, _selectedBrands.toList());
+    } catch (_) {}
+    _log(_selectedBrands.isEmpty
+        ? '数据源：全开自动识别'
+        : '数据源只收：${_selectedBrands.join('、')}');
+  }
+
   /// 最近扫到的可连设备（名 → rssi/mac），页面多选用。只收录有名字的，
   /// 无名广播不进（名字都没有没法选）。每次扫描自动更新。
   final Map<String, SeenDevice> _seenDevices = {};
@@ -1270,6 +1308,7 @@ class BleCgmManager {
         }
         var handled = false;
         for (final protocol in _protocols) {
+          if (!brandEnabled(protocol.brand)) continue; // 数据源没选这家，直接跳过
           if (!protocol.matches(r)) continue;
           handled = true;
           final name = advName.isEmpty ? id : advName;
