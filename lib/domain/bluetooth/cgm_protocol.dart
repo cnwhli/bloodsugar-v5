@@ -717,7 +717,23 @@ class SibionicsProtocol extends CgmProtocol {
       await w.write(sibRc4(authPlain), withoutResponse: true);
       var lastIndex = 0;
       var bound = false;
+      // 分体式（轻享/动感发射器复用）：认证包可能石沉大海，FF31 一直无回包。
+      // 3 秒后没动静就补发一次时间同步+要数据，逼发射器开口——
+      // "握手已发、等待回包"之后全程静默、永远无 glucose/ack 的病根。
+      var gotReply = false;
+      Future.delayed(const Duration(seconds: 3), () async {
+        if (gotReply) return;
+        try {
+          log('FF31 3秒无回包，补发时间同步+要数据（${device.platformName}）…');
+          await w.write(sibRc4(sibTimeSyncPacket()),
+              withoutResponse: true);
+          await Future.delayed(const Duration(milliseconds: 300));
+          await w.write(sibRc4(sibAskDataPacket(1, magic: 0x0806)),
+              withoutResponse: true);
+        } catch (_) {}
+      });
       ff31.onValueReceived.listen((data) async {
+        gotReply = true;
         final d = sibDispatch(data);
         final action = d['action'];
         if (action == 'glucose') {
