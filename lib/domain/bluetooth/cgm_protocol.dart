@@ -49,7 +49,26 @@ String _shortUuid(dynamic g) {
   return s.toUpperCase();
 }
 
-// 128-bit 展开：16-bit UUID -> 标准 base UUID
+// 128-bit 归一化：flutter_blue_plus 的 Guid.toString() 对 16-bit UUID
+// 只返回短式（如 "ff31"），直接跟全式 "0000ff31-..." 比对永远不等——
+// 这就是"服务一览明明有 FF30[FF32,FF31]，下一行却报整机无 FF31/FF32"的病根。
+// 一律先转 str128（全式小写）再比；短式按 base UUID 展开。
+String _normUuid(dynamic g) {
+  try {
+    final s128 = (g as dynamic).str128;
+    if (s128 is String && s128.isNotEmpty) return s128.toLowerCase();
+  } catch (_) {}
+  final s = g.toString().toLowerCase();
+  if (RegExp(r'^[0-9a-f]{4}$').hasMatch(s)) {
+    return '0000$s-0000-1000-8000-00805f9b34fb';
+  }
+  if (RegExp(r'^[0-9a-f]{8}$').hasMatch(s)) {
+    return '$s-0000-1000-8000-00805f9b34fb';
+  }
+  return s;
+}
+
+// 128-bit 展开：16-bit UUID -> 标准 base UUID（_u16('181F') 这类常量构造用）
 String _u16(String hex) =>
     '0000${hex.toLowerCase()}-0000-1000-8000-00805f9b34fb';
 
@@ -658,10 +677,10 @@ class SibionicsProtocol extends CgmProtocol {
       BluetoothCharacteristic? ff31;
       BluetoothCharacteristic? ff32;
       for (final s in device.servicesList) {
-        final su = s.uuid.toString().toLowerCase();
+        final su = _normUuid(s.uuid);
         if (su == svc || su == ff30) {
           for (final c in s.characteristics) {
-            final cu = c.uuid.toString().toLowerCase();
+            final cu = _normUuid(c.uuid);
             if (cu == notifyChr) ff31 = c;
             if (cu == writeChr) ff32 = c;
           }
@@ -672,7 +691,7 @@ class SibionicsProtocol extends CgmProtocol {
       if (ff31 == null || ff32 == null) {
         for (final s in device.servicesList) {
           for (final c in s.characteristics) {
-            final cu = c.uuid.toString().toLowerCase();
+            final cu = _normUuid(c.uuid);
             if (cu == notifyChr) ff31 ??= c;
             if (cu == writeChr) ff32 ??= c;
           }
