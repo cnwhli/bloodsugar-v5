@@ -27,6 +27,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? _stats;
   List<Map<String, dynamic>> _history = [];
   String _latestTime = ''; // 最新读数时间（你要的"血糖时间"）
+  // 分设备卡片：每个发射器各最新一条（微泰一张、硅基一张，带各自时间/品牌/已用天数）
+  List<Map<String, dynamic>> _perSensor = [];
+  // 每台发射器"约已用 X 天"（库里第一条 → 今天；换新机/清库会重计，误差 ±1 天）
+  final Map<String, int> _sensorDays = {};
   DateTime _chartT0 = DateTime.now(); // 曲线首点时间（横轴刻度反推用）
   StreamSubscription<GlucoseReading>? _readingSub;
   // 健康快照（首页健康卡片：自动同步优先，手动补兜底）
@@ -112,9 +116,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final history =
         await AppDatabase.instance.readingsLast24h(limit: 288);
     final latest = await AppDatabase.instance.recentReadings(limit: 1);
+    // 分设备：每个发射器各最新一条 + 各自"约已用天数"（首页一张卡一台设备）
+    final perSensor = await AppDatabase.instance.latestPerSensor();
+    final sensorDays = <String, int>{};
+    final nowDay = DateTime.now();
+    for (final row in perSensor) {
+      final sid = '${row['sensor_id'] ?? ''}';
+      if (sid.isEmpty) continue;
+      final first =
+          await AppDatabase.instance.sensorFirstSeen(sid);
+      if (first != null) {
+        sensorDays[sid] =
+            nowDay.difference(first).inDays.clamp(0, 60);
+      }
+    }
     if (!mounted) return;
     setState(() {
       _history = history;
+      _perSensor = perSensor;
+      _sensorDays
+        ..clear()
+        ..addAll(sensorDays);
       if (history.isNotEmpty) {
         _chartT0 = DateTime.tryParse(
                 '${history.first['created_at'] ?? ''}') ??
@@ -539,6 +561,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               const SizedBox(height: 12),
 
+              // 分设备卡片：一台发射器一张（微泰一张、硅基一张，各看各的值/时间/天数）。
+              // 以前首页只有"最新一条"：微泰 1 分钟一点永远盖住硅基 5 分钟一点，
+              // 硅基的数在首页根本看不到——这就是"首页不能单独看各设备"的病根。
+              // 只有一台设备时不画（大卡片就是它，不重复）。
+              if (_perSensor.length > 1) ...[
+                ..._perSensor.map(_sensorCard),
+                const SizedBox(height: 12),
+              ],
+
               // 24 小时曲线
               Card(
                 child: Padding(
@@ -938,6 +969,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// 分设备卡片：一台发射器一张（值/品牌/发射器/时间/已用天数）。
+  /// 天数口径：微泰分钟序号精确到天；硅基等无分钟口径的用"库里第一条→今天"，
+  /// 标"约 X 天"（换新机/清库会重计，误差 ±1 天，瞎报一天比不报更坏所以标约）。
+  Widget _sensorCard(Map<String, dynamic> row) {
+    final v = (row['value_mmol_l'] as num?)?.toDouble() ?? 0;
+    final brand = '${row['brand'] ?? ''}';
+    final sid = '${row['sensor_id'] ?? ''}';
+    final days = _sensorDays[sid];
+    final color = _statusColorFor(v);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(brand.isEmpty ? '未知设备' : brand,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 2),
+                  Text(sid.isEmpty ? '老数据（无发射器号）' : '发射器 $sid',
+                      style:
+                          const TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 2),
+                  Text(
+                    days == null ? '已用天数：暂无' : '约已用 $days 天',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(v > 0 ? v.toStringAsFixed(1) : '--',
+                    style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: color)),
+                const SizedBox(height: 2),
+                Text(_fmtDbTime('${row['created_at'] ?? ''}'),
+                    style: const TextStyle(
+                        fontSize: 11, color: Colors.grey)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -179,10 +179,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         _brand = r.brandLabel;
         _updatedAt = r.timestamp;
         _hasData = true;
-        // 按设备归档：哪个发射器的数进哪个数值页
+        // 按设备归档：哪个发射器的数进哪个数值页。
+        // fromCloud=false：这是本机蓝牙直连收的（手表自己连的发射器）。
         final key = _devKeyOf(r.brandLabel, r.sensorId);
         _devs[key] = _Dev(r.valueMmolL, r.trend, r.brandLabel,
-            r.timestamp, _useDaysOf(r.brand.name, r.minFromStart));
+            r.timestamp, _useDaysOf(r.brand.name, r.minFromStart), false);
         _hist.add(_Pt(r.valueMmolL, r.timestamp, key));
         if (_hist.length > 500) {
           _hist = _hist.sublist(_hist.length - 500);
@@ -194,7 +195,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       if (!mounted) return;
       setState(() => _scanState = s.toString().split('.').last);
     }));
-    // 扫描日志缓存（诊断折叠页：附近设备/权限/失败原因都在这）
+    // 扫描日志缓存（诊断折叠页：附近设备/权限/失败原因都在这）。
+    // 进页面先读 manager 留档：broadcast 流只推新消息，早期的"附近：/
+    // 已连接"订阅时已经发完，不读留档诊断页就是空的（"连接日志没有了"）。
+    for (final m in _manager.logHistory.reversed.take(30)) {
+      _diagLogs.add(m);
+    }
     _subs.add(_manager.logStream.listen((msg) {
       _diagLogs.add(msg);
       if (_diagLogs.length > 50) _diagLogs.removeAt(0);
@@ -216,12 +222,13 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           _trend = d.trend;
           _updatedAt = d.ts;
           _hasData = true;
-          // BgSync 透了 sensorId：后台的数也归到发射器自己的页
+          // BgSync 透了 sensorId：后台的数也归到发射器自己的页。
+          // 后台 isolate 收的也是本机蓝牙的数 → fromCloud=false。
           final key = _devKeyOf('', d.sensorId);
           final old = _devs[key];
           if (old == null) {
             _devs[key] =
-                _Dev(d.v, d.trend, _devKeyOf('', d.sensorId), d.ts);
+                _Dev(d.v, d.trend, _devKeyOf('', d.sensorId), d.ts, null, false);
           } else {
             old.v = d.v;
             old.trend = d.trend;
@@ -247,7 +254,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     // 归到对应设备页。之前手表只订阅了「上传」，没订阅「下行」——
     // 这就是"手机手表做不到实时同步"的病根之二。
     _startWatchCloudSub();
-    // 断链看门狗：每分钟查一次，5 分钟没新数 → 长震提醒 + 自动重连。
+    // 断链看门狗：每分钟查一次，12 分钟没新数 → 长震提醒 + 自动重连。
     // 灭屏被杀后开屏进来就能发现，不用用户猜“是不是断了”。
     _linkWatchdog =
         Timer.periodic(const Duration(minutes: 1), (_) => _checkLink());
@@ -272,16 +279,22 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
             _updatedAt = ts;
             _hasData = true;
             final key = _devKeyOf(brand, sensorId);
+            // 云下行来的数标 fromCloud：设备页显示"手机同步"，不是手表直连。
+            // 之前没标：手机推过来的硅基数建了设备页，用户以为手表自己连上了硅基。
             final old = _devs[key];
             if (old == null) {
-              _devs[key] = _Dev(mmolL, trend, brand, ts);
+              _devs[key] = _Dev(mmolL, trend, brand, ts, null, true);
             } else {
               old.v = mmolL;
               old.trend = trend;
               old.ts = ts;
               old.brand = brand;
+              old.fromCloud = true;
             }
             _hist.add(_Pt(mmolL, ts, key));
+          if (_hist.length > 500) {
+            _hist = _hist.sublist(_hist.length - 500);
+          }
             if (_hist.length > 500) {
               _hist = _hist.sublist(_hist.length - 500);
             }
@@ -294,10 +307,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     }
   }
 
-  /// 断链检查：监听开着但 5 分钟没数 → 震动 + 自动重扫一次。
+  /// 断链检查：监听开着但 12 分钟没数 → 震动 + 自动重扫一次。
+  /// 12 分钟口径：硅基正常 5 分钟一点，之前 5 分钟线把它正常间隔
+  /// 当断链，又震又重扫还掐 GATT——手机端已改分品牌线，手表跟上。
   Future<void> _checkLink() async {
     if (!mounted || !_lowPowerOn) return;
-    if (DateTime.now().difference(_lastDataAt).inMinutes < 5) return;
+    if (DateTime.now().difference(_lastDataAt).inMinutes < 12) return;
     if (_linkLostBuzzed) return; // 提醒过就不再震，等下一次有数复位
     _linkLostBuzzed = true;
     try {
@@ -482,6 +497,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       }
       setState(() {
         _hist = pts;
+        // _loadLocal 的数来自本机库（手表自己收的），fromCloud=false。
+        // 之前没带这个参数：默认 false 恰好是对的，但语义靠运气——写明。
+        for (final d in devLatest.values) {
+          d.fromCloud = false;
+        }
         _devs
           ..clear()
           ..addAll(devLatest);
@@ -925,10 +945,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           style: TextStyle(fontSize: small + 2, color: Colors.white70),
         ),
         const SizedBox(height: 2),
+        // 来源行：手表直连 / 手机同步（云下行）。看一眼就知道
+        // "这页硅基是不是手表自己连的"——不是，是手机推过来的。
         Text(
-          '${d.brand} · ${_fmtTime(d.ts)}',
+          d.fromCloud ? '☁️ 手机同步 · ${_fmtTime(d.ts)}' : '⌚ 手表直连 · ${_fmtTime(d.ts)}',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: small, color: Colors.grey),
+          style: TextStyle(fontSize: small, color: d.fromCloud ? Colors.cyan : Colors.green),
         ),
         // 已用天数（微泰分钟口径才有；硅基不显示，免得瞎报）。
         // 到期线查档案表（微泰14/三诺15/…），只提醒不锁死：
@@ -974,6 +996,17 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           ),
         ),
         const SizedBox(height: 10),
+        // 本机直连的是谁：manager 单例的 GATT 真相，不是猜的。
+        // 诊断页第一眼先看这行：手表连没连上、连的是谁，一行就有答案。
+        Builder(builder: (context) {
+          final conn = _manager.connectedDeviceName;
+          return Text(
+            conn == null ? '本机直连：无（数是手机同步来的）' : '本机直连：$conn',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: small, color: Colors.white70),
+          );
+        }),
+        const SizedBox(height: 6),
         SizedBox(
           width: double.infinity,
           height: 52,
@@ -991,6 +1024,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
             ),
           ),
         ),
+        const SizedBox(height: 6),
+        // 手表锁定谁：和"手表连谁"选设备同一份白名单，点展开去锁定。
+        // 之前设备数值页没有这个入口：数值页想锁设备得滑回占位页找，
+        // 手表上根本想不到——这就是"交互不行"的病根之一。
+        _buildWatchDevicePicker(small),
         const SizedBox(height: 12),
       ],
     );
@@ -1451,7 +1489,7 @@ class _Pt {
   _Pt(this.v, this.t, [this.dev = '']);
 }
 
-/// 单设备快照（数值页一页一个：值/趋势/品牌/时间 + 已用天数）
+/// 单设备快照（数值页一页一个：值/趋势/品牌/时间 + 已用天数 + 来源）
 class _Dev {
   double v;
   int trend;
@@ -1460,7 +1498,11 @@ class _Dev {
   // 发射器已用天数（微泰分钟序号/60/24 取整；硅基 seq 非分钟口径时为 null
   // 不显示，免得瞎报。到期停播前心里有数，不锁死只提醒）。
   int? useDays;
-  _Dev(this.v, this.trend, this.brand, this.ts, [this.useDays]);
+  // 数从哪来的：false = 本机蓝牙直连，true = 手机经云同步来的。
+  // 不标这个，云下行的硅基数也会建设备页——看着像"手表莫名连上了硅基"。
+  bool fromCloud;
+  _Dev(this.v, this.trend, this.brand, this.ts,
+      [this.useDays, this.fromCloud = false]);
 }
 
 /// 火花线：血糖曲线 + 3.9/10.0 阈值虚线。

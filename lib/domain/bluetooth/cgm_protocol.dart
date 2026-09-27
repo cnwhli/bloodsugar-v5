@@ -1159,6 +1159,10 @@ class BleCgmManager {
   // 同一设备被并发连N次，GATT被挤断，"已连接→断开"死循环。
   final Set<String> _reconnectArmed = {};
   BluetoothDevice? _connectedDevice;
+  // 当前 GATT 直连的是谁（蓝牙名，大写）。null = 本机没直连任何设备。
+  // 手表页拿它和设备页的发射器比对：不一样 → 云同步来的数，不是手表连的。
+  String? get connectedDeviceName =>
+      _connectedDevice == null ? null : _connectedDevice!.platformName.isEmpty ? _connectedDevice!.remoteId.toString() : _connectedDevice!.platformName;
   BleCgmState _state = BleCgmState.idle;
   final _stateController = StreamController<BleCgmState>.broadcast();
   final _readingController = StreamController<GlucoseReading>.broadcast();
@@ -1166,7 +1170,11 @@ class BleCgmManager {
 
   // 页面切换/切后台不丢数据：读数缓存在 manager（单例）里，页面只订阅显示
   final List<GlucoseReading> _history = [];
-  List<GlucoseReading> get history => List.unmodifiable(_history);
+  final List<String> _logHistory = [];
+  List<String> get history => List.unmodifiable(_history);
+  List<String> get logHistory => List.unmodifiable(_logHistory);
+  // 本机当前 GATT 直连的设备名（手表页用它区分"手表直连"和"手机同步"：
+  // 云下行来的数也会建设备页，不标来源就以为"手表莫名连上了硅基"）。
   void _emitReading(GlucoseReading r) {
     _history.insert(0, r);
     if (_history.length > 200) _history.removeLast();
@@ -1211,8 +1219,14 @@ class BleCgmManager {
   Stream<String> get logStream => _logController.stream;
 
   void _log(String s) {
+    _logHistory.add(s);
+    if (_logHistory.length > 100) _logHistory.removeAt(0);
     if (!_logController.isClosed) _logController.add(s);
   }
+
+  /// 日志留档：broadcast 流只推新消息，切页/重进后看不到之前的。
+  /// 之前手表诊断页订阅时早期的"附近：/已连接"已经发完——
+  /// 这就是"连接日志没有了"的病根。页面 init 时先读这份留档。
 
   void _setState(BleCgmState s) {
     _state = s;
@@ -1828,6 +1842,7 @@ class BleCgmManager {
     await _detachListener();
     await _connectedDevice?.disconnect();
     _connectedDevice = null;
+    _log('已断开连接（手动：本机 GATT 已断开）');
     _connecting.clear();
     _reconnectArmed.clear(); // 用户手动断开：旧监听全部退役，不再自动重连
     _setState(BleCgmState.idle);

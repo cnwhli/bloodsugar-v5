@@ -437,6 +437,41 @@ class AppDatabase {
     );
   }
 
+  /// 每个发射器各最新一条（首页分设备卡片用：微泰一页、硅基一页）。
+  /// 同一发射器按 sensor_id 归组取最新 created_at，空 sensor 的老数
+  /// 据归一组"未知设备"，不和任何发射器混。
+  Future<List<Map<String, dynamic>>> latestPerSensor() async {
+    return _db!.rawQuery('''
+      SELECT g.* FROM glucose_readings g
+      INNER JOIN (
+        SELECT COALESCE(sensor_id, '') AS sid, MAX(created_at) AS mx
+        FROM glucose_readings
+        GROUP BY COALESCE(sensor_id, '')
+      ) m ON COALESCE(g.sensor_id, '') = m.sid AND g.created_at = m.mx
+      ORDER BY g.created_at DESC
+    ''');
+  }
+
+  /// 某发射器最早一条时间（已用天数兜底口径：库里第一条 → 今天。
+  /// 硅基 seq 非分钟口径算不出天数时用这个，误差 ±1 天，标"约"）。
+  Future<DateTime?> sensorFirstSeen(String sensorId) async {
+    final rows = await _db!.query(
+      'glucose_readings',
+      columns: ['MIN(created_at) AS first_seen'],
+      where: 'COALESCE(sensor_id, ?) = ?',
+      whereArgs: [sensorId, sensorId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final s = '${rows.first['first_seen'] ?? ''}';
+    if (s.isEmpty) return null;
+    try {
+      return DateTime.parse(s);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 最近 24 小时（时间正序，供曲线图；只取 24 小时内，旧数据不画）
   Future<List<Map<String, dynamic>>> readingsLast24h(
       {int limit = 288}) async {
