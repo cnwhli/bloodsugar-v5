@@ -193,7 +193,7 @@ abstract class CgmProtocol {
     void Function(GlucoseReading) onReading,
     void Function(String) log,
   ) async {
-    await device.connect(autoConnect: false);
+    await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
     await device.discoverServices();
     for (final service in device.servicesList) {
       for (final c in service.characteristics) {
@@ -634,7 +634,7 @@ class SibionicsProtocol extends CgmProtocol {
     // 先走 GS1 流程（免账号），收到 Wrong account 再提示用户填。
     try {
       log('连接硅基 ${device.platformName}…');
-      await device.connect(autoConnect: false);
+      await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
       try {
         await device.requestMtu(247);
       } catch (_) {}
@@ -945,6 +945,11 @@ class BleCgmManager {
 
   void _notifySeenDevices() {
     if (!_seenDevicesDirty) return;
+    // 上限 30：附近蓝牙动辄几十个（无名+手环+耳机），不裁页面多选区无限变长，
+    // 把血糖列表挤没——"下面的内容都显示不了"的病根。超了踢最老的。
+    while (_seenDevices.length > 30) {
+      _seenDevices.remove(_seenDevices.keys.first);
+    }
     final now = DateTime.now();
     if (now.difference(_lastSeenNotify).inSeconds < 10) return;
     _lastSeenNotify = now;
@@ -1429,6 +1434,16 @@ class BleCgmManager {
 
   Future<void> _connectToDevice(
       BluetoothDevice device, CgmProtocol protocol) async {
+    // 白名单硬拦截（连首次连接也拦）：手动模式下非选中设备到此直接回，
+    // 不碰射频不改状态。之前只在扫描监听里拦，重连/直调通道全绕过去了——
+    // 这就是"选了还在连 HBB"那台的病根。
+    final nm = device.platformName.isEmpty
+        ? device.remoteId.toString()
+        : device.platformName;
+    if (isManualSelect && !_selectedNames.contains(nm.toUpperCase())) {
+      _log('跳过 $nm：不在已选名单，不连接');
+      return;
+    }
     _setState(BleCgmState.connecting);
     _lastConnAttempt[device.remoteId.toString()] = DateTime.now();
     try {
@@ -1473,6 +1488,23 @@ class BleCgmManager {
           if (_connectedDevice?.remoteId != device.remoteId) {
             _reconnectArmed.remove(devId);
             return; // 期间用户点了断开/换了设备，停
+          }
+          // 白名单硬拦截（重连通道）：用户已改选/取消选择后，旧监听不再续连，
+          // 否则"取消勾选了还在 10 秒重连"，看着像没生效。
+          final rnm = device.platformName.isEmpty
+              ? device.remoteId.toString()
+              : device.platformName;
+          if (isManualSelect &&
+              !_selectedNames.contains(rnm.toUpperCase())) {
+            _reconnectArmed.remove(devId);
+            try {
+              await device.disconnect();
+            } catch (_) {}
+            if (_connectedDevice?.remoteId == device.remoteId) {
+              _connectedDevice = null;
+            }
+            _log('停连 $rnm：已不在选中名单，不再重连');
+            return;
           }
           try {
             await _runHandleDevice(device, protocol);

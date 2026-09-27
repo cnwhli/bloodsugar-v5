@@ -349,29 +349,38 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           if (_manualOn)
             Text('锁定中：${_manager.selectedNames.join('、')}',
                 style: const TextStyle(fontSize: 12, color: Colors.green)),
-          ...names.map((k) {
-            final d = _seen[k]!;
-            final checked = _picked.contains(k);
-            return CheckboxListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text('${d.name}（${d.rssi}dBm）',
-                  style: const TextStyle(fontSize: 13)),
-              subtitle: Text('${d.brandLabel} · ${d.mac}',
-                  style:
-                      const TextStyle(fontSize: 11, color: Colors.white54)),
-              value: checked,
-              onChanged: (v) {
-                setState(() {
-                  if (v == true) {
-                    _picked.add(k);
-                  } else {
-                    _picked.remove(k);
-                  }
-                });
-              },
-            );
-          }),
+          // 限高独立滚动：附近蓝牙多时多选区自己滚，不把血糖列表挤没——
+          // "下面的内容都显示不了"的另一半病根（manager 侧已限 30 个）
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: SingleChildScrollView(
+              child: Column(
+                children: names.map((k) {
+                  final d = _seen[k]!;
+                  final checked = _picked.contains(k);
+                  return CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('${d.name}（${d.rssi}dBm）',
+                        style: const TextStyle(fontSize: 13)),
+                    subtitle: Text('${d.brandLabel} · ${d.mac}',
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.white54)),
+                    value: checked,
+                    onChanged: (v) {
+                      setState(() {
+                        if (v == true) {
+                          _picked.add(k);
+                        } else {
+                          _picked.remove(k);
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
         ],
       ),
     );
