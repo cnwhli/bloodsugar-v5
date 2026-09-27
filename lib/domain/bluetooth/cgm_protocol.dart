@@ -730,19 +730,78 @@ class SibionicsProtocol extends CgmProtocol {
       var lastIndex = 0;
       var bound = false;
       var activated = false; // ACTIVATE(0x0A07) 发过且收到 0x07 回包
-      // 10 秒无任何回包：换下一个 key 重连再试（key 轮换），而不是原地补发——
-      // key 错了补发多少次都是静默。日志会写"换key重连"。
+      // 10 秒无任何回包：先试旧款明文 ask，再换 key 重连——
+      // 三套 key 都静默 + 明文也静默 = 连接被占/顺序问题，不是包问题。
+      // （旧款 GS1 siType 0 不认 RC4 认证，对它发认证就是对牛弹琴；
+      // gluco-glance/Juggluco legacy 都是先 AA 55 07 明文问数。）
       var gotReply = false;
+      var legacyTried = false;
       Future.delayed(const Duration(seconds: 10), () async {
-        if (gotReply) return;
+        if (gotReply || legacyTried) return;
+        legacyTried = true;
         try {
-          log('FF31 10秒无回包，换下一个认证 key 重连（${device.platformName}）…');
+          final ask = sibLegacyAskPacket(1, mac);
+          log('FF31 10秒无回包，试旧款明文 ask（${device.platformName}）…');
+          await w.write(ask, withoutResponse: false);
+          // 明文也 10 秒静默 → 换下一个 key 重连
+          await Future.delayed(const Duration(seconds: 10));
+          if (gotReply) return;
+          log('明文也无回包，换下一个认证 key 重连（${device.platformName}）…');
           try {
             await device.disconnect();
           } catch (_) {}
         } catch (_) {}
       });
+      var legacyMode = false; // 收到 AA 55 09 即切旧款明文流程
       ff31.onValueReceived.listen((data) async {
+        // 旧款分支：明文帧不走 RC4。注意 AUTH_REQUEST 是明文 5 字节，
+        // 必须先判——它 RC4 解密后是乱码，会被 sibDispatch 吞成 ignore。
+        if (!legacyMode && sibIsAuthRequest(data)) {
+          gotReply = true;
+          legacyMode = true;
+          log('硅基要加密对话（AUTH_REQUEST），切加密认证流程（${device.platformName}）');
+          return;
+        }
+        if (!legacyMode &&
+            data.length >= 3 &&
+            data[0] == 0xAA &&
+            data[1] == 0x55 &&
+            data[2] == 0x09) {
+          gotReply = true;
+          legacyMode = true;
+          log('硅基旧款明文回包（AA 55 09），切明文流程（${device.platformName}）');
+        }
+        if (legacyMode) {
+          final pts = sibParseLegacyGlucose(data);
+          for (final p in pts) {
+            if (p['index']! > lastIndex) lastIndex = p['index']!;
+            // 时间：最新点 ≈ 现在，其余按序号倒推分钟（gluco-glance 口径）
+            final nowMs = DateTime.now().millisecondsSinceEpoch;
+            final newestAdd =
+                pts.map((e) => e['addSec']!).reduce((a, b) => a > b ? a : b);
+            final ts = nowMs -
+                (newestAdd - p['addSec']!) * 1000 -
+                (lastIndex - p['index']!) * 60000;
+            onReading(GlucoseReading(
+              valueMgDl: p['mmolx10']! / 10 * 18.0182,
+              timestamp: DateTime.fromMillisecondsSinceEpoch(ts),
+              trend: 0,
+              brand: brand,
+              minFromStart: p['index'],
+              sensorId: device.platformName.isNotEmpty
+                  ? device.platformName.toUpperCase()
+                  : device.remoteId.toString(),
+            ));
+          }
+          // 明文要下一批：nextid = lastIndex + 1（带响应写，glance 口径）
+          try {
+            if (pts.isNotEmpty) {
+              await w.write(sibLegacyAskPacket(lastIndex + 1, mac),
+                  withoutResponse: false);
+            }
+          } catch (_) {}
+          return;
+        }
         gotReply = true;
         final d = sibDispatch(data);
         final action = d['action'];

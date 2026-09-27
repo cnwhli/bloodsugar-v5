@@ -34,6 +34,7 @@ One app for your phone and your watch — real-time glucose, health vitals, and 
 - **双设备去重**：UI 去重带发射器，微泰/硅基序号各自计数不再互吞——"连上了但看不到数"的病根；连接型收数也喂看门狗
 - **数据源选择**（对标码农 xDrip"您使用哪个系统"）：扫描页顶部"数据源"默认全部品牌自动识别，点展开勾你用的系统（微泰 AiDEX 二代/硅基 GS1/GS3/三诺/欧态/Libre/Dexcom 等 12 个），只跑选中的协议——181F 复用的几家不再误认，附近列表清爽，选完存本机
 - **硅基三方交叉验证大修**：对照 Juggluco + chalimov/sibionics_cgm_ha + mohasi/gluco-glance 三个独立实现——①认证 key 轮换（EU→国行→俄版，国行用 GKSHGDU0TYA456G4，错了静默丢弃是零回包头号嫌疑）；②认证后先发 ACTIVATE(0A 07+时间+1234)再时间同步（之前跳过激活）；③5 字节 ACK 漏判修复（length>=6 改 >=5，回了也当没看见的帮凶）；④10 秒无回包断开换 key 重连（key 错补发多少次都静默）；⑤ACK 按 type/code 状态机推进（0x01 认证→0x07 激活→0x03 时间→要数据）
+- **硅基旧款明文分支**：认证 10 秒无回包先发旧款明文 ask（AA 55 07+index+MAC反转，gluco-glance/Juggluco legacy 口径），收到 AA 55 09 即切明文流程（14 字节大端记录，glucoseTenths/10=mmol/L）；收到 23 F7 6F D9 F4（AUTH_REQUEST）= 发射器要加密对话，切回加密认证；明文也静默才换 key 重连——三套 key+明文全静默就是连接被占，不是包问题
 - **硅基断连死循环修复**：握手失败（无FF31/FF32）抛异常计入退避不再假装"已连接"；重连监听单例化，不再并发挤断GATT
 - **固定签名**：Release 包用固定 keystore 签名（CI Secrets 注入），包之间可直接覆盖安装，不再报签名不一致
 

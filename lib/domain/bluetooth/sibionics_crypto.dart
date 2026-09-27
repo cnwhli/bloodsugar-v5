@@ -77,6 +77,67 @@ List<int> sibAuthPacket(String mac, {String appKey = sibAppKeySijoy}) {
   return [...head, sibChk(head)];
 }
 
+/// 明文 ask 帧（旧款 GS1 siType 0，gluco-glance / Juggluco legacy 路径）：
+/// AA 55 07 + index u16LE + MAC反转6B + 8 字节 0 + chk（全包和 ≡ 0）。
+/// 旧款发射器不认 26 字节 RC4 认证包——对它发认证就是对牛弹琴，零回包。
+/// 认证无回包时改发这个，有 AA 55 09 回包即旧款，走明文流程。
+List<int> sibLegacyAskPacket(int index, String mac) {
+  final parts = mac.split(':');
+  final reversed =
+      parts.reversed.map((h) => int.parse(h, radix: 16)).toList();
+  final head = [
+    0xAA, 0x55, 0x07,
+    index & 0xFF, (index >> 8) & 0xFF,
+    ...reversed, 0, 0, 0, 0, 0, 0, 0, 0,
+  ];
+  return [...head, sibChk(head)];
+}
+
+/// 旧款 GS1 明文 glucose 帧解析（AA 55 09 + count + count×14B 记录 + chk）。
+/// 每记录 14B 大端：index/temp/electrical/glucoseTenths/status/unreceived/addTime。
+/// glucoseTenths/10 = mmol/L。返回 {index, mmolx10, addSec, unreceived}。
+List<Map<String, int>> sibParseLegacyGlucose(List<int> frame) {
+  final out = <Map<String, int>>[];
+  if (frame.length < 5 ||
+      frame[0] != 0xAA || frame[1] != 0x55 || frame[2] != 0x09) {
+    return out;
+  }
+  var sum = 0;
+  for (final b in frame) {
+    sum = (sum + b) & 0xFF;
+  }
+  if (sum != 0) return out; // 校验和不过
+  final count = frame[3];
+  var o = 4;
+  int be(int i) => ((frame[i] & 0xFF) << 8) | (frame[i + 1] & 0xFF);
+  for (var i = 0; i < count; i++) {
+    if (o + 14 > frame.length - 1) break;
+    final index = be(o);
+    final glucoseTenths = be(o + 6);
+    final unreceived = be(o + 10);
+    final addSec = be(o + 12);
+    // glucoseTenths 合理范围 18~300（1.8~30 mmol/L，gluco-glance 口径）
+    if (glucoseTenths >= 18 && glucoseTenths <= 300) {
+      out.add({
+        'index': index,
+        'mmolx10': glucoseTenths,
+        'unreceived': unreceived,
+        'addSec': addSec > 32767 ? addSec - 65536 : addSec,
+      });
+    }
+    o += 14;
+  }
+  return out;
+}
+
+/// 旧款要加密对话的信号：5 字节 23 F7 6F D9 F4（gluco-glance AUTH_REQUEST）。
+bool sibIsAuthRequest(List<int> data) =>
+    data.length == 5 &&
+    data[0] == 0x23 &&
+    data[1] == 0xF7 &&
+    data[2] == 0x6F &&
+    data[3] == 0xD9 &&
+    data[4] == 0xF4;
 /// 组 11 字节激活包：0A 07 + uint32 LE unix秒 + 1234(u32 LE) + chk。
 /// 顺序来自 chalimov/sibionics_cgm_ha（对照 Juggluco 状态机）：
 /// 认证 ACK(0x01) 后必须先发 ACTIVATE，等回包(0x07) 再发时间同步+要数据。
