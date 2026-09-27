@@ -434,6 +434,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   // 默认折叠只露一行；点开多选品牌（微泰/硅基/三诺/欧态…），
   // 只跑选中的协议：181F 复用品牌不再误认，附近列表也清爽。
   // 全取消 = 全开自动识别。
+  // 显示取页面勾选（解密了才有数之后也立刻看到选择，之前读 manager
+  // 的旧值，勾了还显示"全部品牌"，看着像没生效）。
   static const _brandOptions = [
     ['aidexX', '微泰 AiDEX 二代'],
     ['sibionics', '硅基 GS1/GS3'],
@@ -450,10 +452,10 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   ];
 
   Widget _buildBrandPicker() {
-    final selected = _manager.selectedBrands;
-    final summary = selected.isEmpty
+    // 显示用页面勾选（解密了才有数之后也能立刻看到选择，别再问"勾了也没用"）
+    final summary = _pickedBrands.isEmpty
         ? '全部品牌自动识别'
-        : '只收：${selected.join('、')}';
+        : '只收：${_pickedBrands.join('、')}';
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(horizontal: 8),
@@ -493,7 +495,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                         TextStyle(fontSize: 12, color: Colors.white70)),
                 const Spacer(),
                 TextButton(
-                  onPressed: (_pickedBrands.isEmpty && selected.isEmpty)
+                  onPressed: (_pickedBrands.isEmpty &&
+                          _manager.selectedBrands.isEmpty)
                       ? null
                       : () async {
                           if (_pickedBrands.isEmpty) {
@@ -506,7 +509,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                           setState(() => _pickedBrands =
                               Set.of(_manager.selectedBrands));
                         },
-                  child: Text(selected.isEmpty
+                  child: Text(_manager.selectedBrands.isEmpty
                       ? '只收选中的'
                       : '已选（点我改选/全取消回全开）'),
                 ),
@@ -525,14 +528,20 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                       title: Text(b[1],
                           style: const TextStyle(fontSize: 13)),
                       value: checked,
-                      onChanged: (v) {
-                        setState(() {
-                          if (v == true) {
-                            _pickedBrands.add(b[0]);
-                          } else {
-                            _pickedBrands.remove(b[0]);
-                          }
-                        });
+                      onChanged: (v) async {
+                        // 打勾即生效：不用再找"只收选中的"按钮点一下
+                        // （之前点了勾还得再点确认，步骤多看着像没用）。
+                        final next = Set.of(_pickedBrands);
+                        if (v == true) {
+                          next.add(b[0]);
+                        } else {
+                          next.remove(b[0]);
+                        }
+                        setState(() => _pickedBrands = next);
+                        await _manager.setSelectedBrands(next);
+                        if (!mounted) return;
+                        setState(() => _pickedBrands =
+                            Set.of(_manager.selectedBrands));
                       },
                     );
                   }).toList(),
