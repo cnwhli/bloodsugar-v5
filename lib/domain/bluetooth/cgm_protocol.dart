@@ -654,6 +654,10 @@ class SibionicsProtocol extends CgmProtocol {
     // FF31 notify 经 sibDispatch 分发：glucose 直接出数，ack 按状态机回包。
     // GS3 账号 ID（bindUser 用）：SibionicsProtocol.accountId，未填则
     // 先走 GS1 流程（免账号），收到 Wrong account 再提示用户填。
+    // 保活机制（防"能收数但总断"）：连上后每 55 秒写一次时间同步
+    // 喂发射器（发射器认识的合法帧），让它知道 App 还在听，
+    // 不然发射器以为对端丢了主动断 GATT。每轮喂狗前先看 isConnected，
+    // 已经断了就不写（免得写失败抛异常把监听链带崩）。
     try {
       log('连接硅基 ${device.platformName}…');
       // connect 由 manager 建好（_runHandleDevice 先连），这里只做握手，
@@ -875,6 +879,22 @@ class SibionicsProtocol extends CgmProtocol {
         }
       });
       log('硅基握手已发（${device.platformName}），等待 FF31 回包…（日志会显示 glucose/ack）');
+      // 保活：每 55 秒写一次时间同步（喂发射器，防它主动断 GATT）。
+      // 之前连上后只等 notify 不主动说话，链路一静默发射器就超时断开——
+      // 这就是"能收数但过一会就断"的病根。55 秒 < 系统 60 秒链路超时。
+      // 写 timeSync（发射器认识的合法帧），不是凭空捏的 ACK。
+      () async {
+        while (!device.isDisconnected) {
+          await Future.delayed(const Duration(seconds: 55));
+          if (device.isDisconnected) break;
+          try {
+            await w.write(sibRc4(sibTimeSyncPacket()),
+                withoutResponse: true);
+          } catch (_) {
+            break; // 写失败=链路已死，停保活等重连监听接管
+          }
+        }
+      }();
     } catch (e) {
       log('硅基连接异常 ${device.platformName}：$e');
       try {

@@ -198,6 +198,11 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       if (_diagLogs.length > 50) _diagLogs.removeAt(0);
       if (_showDiag && mounted) setState(() {});
     }));
+    // 附近设备变化 → 选设备区重刷（节流 10 秒，manager 侧已节流）
+    _subs.add(_manager.seenDevicesStream.listen((_) {
+      if (!mounted) return;
+      if (_watchDevsOpen) setState(() {}); // 展开时才刷，折叠只看 summary
+    }));
     // 后台收数通知（手表息屏期间的数）：归到对应设备页，不用点开
     _subs.add(BgSync.stream.listen((msg) {
       if (!mounted) return;
@@ -229,6 +234,13 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       } catch (_) {}
     }));
     setState(() => _scanState = _manager.state.toString().split('.').last);
+    // 手表直连的前提：白名单 + 数据源必须先恢复，否则默认自动模式
+    // 全品牌见谁连谁，硅基 LT 没被锁定时重连通道绕过去乱连别的。
+    // 之前手表压根没调这两个 load，手机锁了 LT、手表还在自动乱连。
+    // initState 非 async：fire-and-forget（load 完之前点的监听走旧值，
+    // 进页面 1 秒内就完成，不影响）。
+    _manager.loadSelectedDevices().catchError((_) {});
+    _manager.loadSelectedBrands().catchError((_) {});
     // 手机→手表下行：登录后订阅 Realtime，手机收的数秒级到手表入库+
     // 归到对应设备页。之前手表只订阅了「上传」，没订阅「下行」——
     // 这就是"手机手表做不到实时同步"的病根之二。
@@ -524,6 +536,93 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   }
 
   bool _lowPowerOn = false;
+
+  // 手表锁定了谁：读 manager 白名单显示（空 = 自动模式），不用页面缓存——
+  // 白名单是单例真相，页面只管显示 + 点选，点了立刻 setSelectedDevices。
+  // 之前手机端吃过亏：页面缓存和 manager 两份值，显示以缓存为准就"选了显示未锁定"。
+  bool _watchDevsOpen = false; // 默认折叠：圆屏小，只露一行
+
+  /// 手表选设备区： nearby 有名的 + 当前白名单，二选一锁定。
+  /// 小屏交互：默认折叠一行（"锁定：LT…/自动模式"），点展开多选，
+  /// 打勾即生效（不用再找确认按钮）。
+  Widget _buildWatchDevicePicker(double small) {
+    final seen = _manager.seenDevices.values.toList()
+      ..sort((a, b) => b.rssi.compareTo(a.rssi));
+    final locked = _manager.selectedNames;
+    final summary = locked.isEmpty
+        ? '自动模式（见谁连谁）'
+        : '锁定：${locked.join('、')}';
+    // 可选集合 = 附近有名的 + 已锁定的（已锁定但暂时扫不到也留着可取消）
+    final names = <String>{};
+    for (final s in seen) {
+      names.add(s.name.toUpperCase());
+    }
+    names.addAll(locked);
+    final list = names.toList()..sort();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: () => setState(() => _watchDevsOpen = !_watchDevsOpen),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text(
+                '手表连谁 · $summary ${_watchDevsOpen ? '▲' : '▼'}',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: small, color: Colors.white70),
+              ),
+            ),
+          ),
+          if (_watchDevsOpen) ...[
+            if (list.isEmpty)
+              Text('附近暂无设备：先点"手表监听"扫一轮',
+                  style: TextStyle(fontSize: small, color: Colors.grey)),
+            for (final n in list.take(12))
+              GestureDetector(
+                onTap: () async {
+                  // 点一下 = 只锁这一台；点已锁定的 = 取消回自动
+                  final next =
+                      locked.contains(n) ? <String>{} : {n};
+                  await _manager.setSelectedDevices(next);
+                  if (!mounted) return;
+                  setState(() {}); // 白名单变了，summary/✅ 重刷
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(locked.contains(n) ? '✅ ' : '⭕ ',
+                          style: TextStyle(fontSize: small)),
+                      Flexible(
+                        child: Text(n,
+                            style: TextStyle(
+                                fontSize: small,
+                                color: locked.contains(n)
+                                    ? Colors.green
+                                    : Colors.white70)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            Text('点一下锁定，再点取消；云只同步血糖不同步选择',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: small - 1, color: Colors.grey)),
+          ],
+        ],
+      ),
+    );
+  }
 
   /// 点历史页切换范围
   void _cycleRange() {
@@ -1003,6 +1102,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: small - 1, color: Colors.grey),
         ),
+        const SizedBox(height: 6),
+        // 手表选设备：附近有名的列出来点选锁定（和手机"只连选中的"同口径）。
+        // 之前手表没有选设备入口：要么自动乱连（YD/耳机都连），要么手机锁了
+        // LT、手表还在自动模式——这就是"手表不知道咋连硅基"的病根。
+        // 数据源勾选不同步：云只同步血糖，不同步"选了谁"，两端各选各的。
+        _buildWatchDevicePicker(small),
         const SizedBox(height: 6),
         // 诊断折叠：点一下展开最近 10 条日志
         GestureDetector(
