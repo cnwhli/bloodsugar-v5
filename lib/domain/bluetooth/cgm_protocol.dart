@@ -1282,25 +1282,71 @@ class BleCgmManager {
 
   DateTime _lastDiagAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// 链路看门狗：收到任何品牌的新数都喂狗；5 分钟没数 → 提醒断链，
+  /// 链路看门狗：收到任何品牌的新数都喂狗；分设备线判断链（微泰3/硅基12），
   /// 而不是静默丢数（"手表还是断链"却无感知，就是缺这个）。
+  /// 全局 _lastDataAt 照喂（兼容"一个数都没来过"的退路线），
+  /// 分设备 _devLastDataAt 也喂（checkDataGap/checkLinkLost 分线判）。
   void _linkWatchdog() {
     _lastDataAt = DateTime.now();
     _linkLostBuzzed = false;
   }
 
+  /// 带设备身份的喂狗（广播/连接/后台/云下行统一调）：全局+分设备一起喂。
+  void _linkWatchdogFor(String brandLabel, String sensorId) {
+    _lastDataAt = DateTime.now();
+    _linkLostBuzzed = false;
+    _feedDevWatchdog(brandLabel, sensorId);
+  }
+
   DateTime _lastDataAt = DateTime.now();
   bool _linkLostBuzzed = false;
+  // ---- 分设备看门狗：微泰 1 分钟一点，硅基 5 分钟一点，不能用同一根线量 ----
+  // 之前全设备共用 _lastDataAt：一台有数就全复位，另一台断了 10 分钟也看不见；
+  // 而且 90 秒/3 分钟的线是按微泰画的，硅基正常 5 分钟才来一点，
+  // 硅基一来就"没新数X分X秒"误报，用户看着像断流。
+  // 现在每发射器记自己的 lastDataAt（key=品牌·sensorId，和分页同口径），
+  // 微泰线 90s/3min，硅基线 6min/12min（5 分钟 cadence + 1 分钟余量）。
+  final Map<String, DateTime> _devLastDataAt = {};
+  String _devWatchKey(String brandLabel, String sensorId) =>
+      sensorId.isEmpty ? brandLabel : '$brandLabel · $sensorId';
+  void _feedDevWatchdog(String brandLabel, String sensorId) {
+    _devLastDataAt[_devWatchKey(brandLabel, sensorId)] = DateTime.now();
+  }
+
+  // 硅基系品牌名（含中文显示名 + 枚举名，全小写匹配，免得改名又漏）
+  bool _isSibionics(String brandLabel) {
+    final b = brandLabel.toLowerCase();
+    return b.contains('sibionics') ||
+        b.contains('硅基') ||
+        b.contains('gs1') ||
+        b.contains('gs3');
+  }
   // 分钟级断流盯防：AiDEX 每分钟广播一次，正常 60-90 秒必有新数。
   // 之前 5 分钟才报断链，中间 7-8 分钟空洞静默无感知。
   // 改为：90 秒无数 → 打"X分X秒没新数"（只日志不震动）；
   // 3 分钟无数 → 报断链（震动+自动重扫），空洞压到 3 分钟内。
   DateTime _lastGapWarnAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// 供页面/后台定时调用：检查是否断链（5 分钟无新数）
+  /// 供页面/后台定时调用：检查是否断链（分设备分线：微泰 3 分钟，硅基 12 分钟）
   /// 返回 true = 刚判定断链（调用方负责震动/通知，只触发一次直到恢复）
+  /// 硅基正常 5 分钟一点：12 分钟（漏 2 个点）才报断链，之前 3 分钟一刀切，
+  /// 硅基每个正常间隔都被判"断链"还自动重扫——重扫 stopScan 断 GATT，
+  /// 好好的硅基连接被自己掐断，这就是"硅基总是断流"的病根之一。
   bool checkLinkLost() {
-    if (!_linkLostBuzzed &&
+    // 分设备线：任一设备超自己线即断链（报哪台，页面重扫不瞎连）
+    for (final e in _devLastDataAt.entries) {
+      final threshMin = _isSibionics(e.key) ? 12 : 3;
+      if (DateTime.now().difference(e.value).inMinutes >= threshMin) {
+        if (!_linkLostBuzzed) {
+          _linkLostBuzzed = true;
+          return true;
+        }
+        return false;
+      }
+    }
+    // 还没有任何设备来过数：退回全局 3 分钟线
+    if (_devLastDataAt.isEmpty &&
+        !_linkLostBuzzed &&
         DateTime.now().difference(_lastDataAt).inMinutes >= 3) {
       _linkLostBuzzed = true;
       return true;
@@ -1308,19 +1354,46 @@ class BleCgmManager {
     return false;
   }
 
-  /// 分钟级空洞预警：90 秒没新数就打一条日志（节流 60 秒），
-  /// 让"23:32→23:25 这种 7 分钟空洞"在发生 90 秒后就被看见，
+  /// 分钟级空洞预警：按设备 cadence 分线判（微泰 90 秒，硅基 6 分钟），
+  /// 让"23:32→23:25 这种 7 分钟空洞"在发生后就被看见，
   /// 而不是等用户翻列表才发现。返回 true = 刚预警（调用方可刷新页面）。
+  /// 硅基正常 5 分钟才一点：6 分钟内有数就不报，免得"没新数X分X秒"误报
+  /// 让用户以为断流（其实是发射器 cadence 就是 5 分钟）。
   bool checkDataGap() {
-    final gap = DateTime.now().difference(_lastDataAt);
-    if (gap.inSeconds >= 90 &&
-        DateTime.now().difference(_lastGapWarnAt).inSeconds >= 60) {
-      _lastGapWarnAt = DateTime.now();
-      _log('没新数 ${gap.inMinutes}分${gap.inSeconds % 60}秒了（发射器每分钟广播一次；'
-          '先看手机离发射器远不远、微泰官方App杀了没）');
-      return true;
+    DateTime? worstGapAt;
+    String? worstDev;
+    var worstSecs = 0;
+    for (final e in _devLastDataAt.entries) {
+      final gapSecs = DateTime.now().difference(e.value).inSeconds;
+      // 分线：硅基 6 分钟，别的 90 秒
+      final thresh = _isSibionics(e.key) ? 360 : 90;
+      if (gapSecs >= thresh && gapSecs > worstSecs) {
+        worstSecs = gapSecs;
+        worstGapAt = e.value;
+        worstDev = e.key;
+      }
     }
-    return false;
+    // 还没有任何设备来过数：退回全局线（90 秒），防"开了半天没数还静默"
+    if (worstDev == null && _devLastDataAt.isEmpty) {
+      final gap = DateTime.now().difference(_lastDataAt);
+      if (gap.inSeconds >= 90 &&
+          DateTime.now().difference(_lastGapWarnAt).inSeconds >= 60) {
+        _lastGapWarnAt = DateTime.now();
+        _log('没新数 ${gap.inMinutes}分${gap.inSeconds % 60}秒了（微泰每分钟广播一次；'
+            '先看手机离发射器远不远、微泰官方App杀了没）');
+        return true;
+      }
+      return false;
+    }
+    if (worstDev == null) return false;
+    if (DateTime.now().difference(_lastGapWarnAt).inSeconds < 60) {
+      return false;
+    }
+    _lastGapWarnAt = DateTime.now();
+    final gap = DateTime.now().difference(worstGapAt!);
+    _log('$worstDev 没新数 ${gap.inMinutes}分${gap.inSeconds % 60}秒了'
+        '（${_isSibionics(worstDev) ? '硅基正常 5 分钟一点，超 6 分钟才算异常' : '微泰每分钟广播一次；先看距离、官方App杀了没'}）');
+    return true;
   }
 
   /// 诊断日志节流：广播一分钟几十包，同类诊断 60 秒只刷一条，免得刷屏
@@ -1434,6 +1507,8 @@ class BleCgmManager {
               }
               final fresh = readings.first;
               _linkWatchdog(); // 有新数就喂狗：蓝牙链路活着
+              _linkWatchdogFor(
+                  fresh.brand.displayName, fresh.sensorId); // 分设备线也喂
               if (_shouldEmit(fresh)) {
                 _emitReading(fresh);
                 _log('${fresh.valueMmolL.toStringAsFixed(1)} mmol/L · '
@@ -1586,6 +1661,34 @@ class BleCgmManager {
   /// 平台扫描照常由前台发起，不跳过。
   bool foregroundScanActive = false;
   static bool backgroundRunning = false;
+
+  /// 断链续扫（不断开已连设备）：只重开平台扫描 + 重挂监听，不碰 GATT 连接。
+  /// 之前断链直接调 startScan → _detachListener → stopScan，全局停扫瞬间
+  /// 把好好的硅基 GATT 牵连掐断——"硅基总是断流"的病根之一。
+  /// 平台 startScan 本来就是幂等的（已在扫会先停再起），已连 GATT 不受影响。
+  Future<String?> rescanKeepConnected({bool quiet = true}) async {
+    final err = await _ensureReady();
+    if (err != null) return err;
+    _setState(BleCgmState.scanning);
+    foregroundScanActive = true;
+    await _detachListener();
+    try {
+      _attachListener();
+      await FlutterBluePlus.startScan(
+        continuousUpdates: true,
+        removeIfGone: const Duration(minutes: 2),
+        androidScanMode: AndroidScanMode.lowLatency,
+      );
+      if (!quiet) _log('续扫已启动（已连设备不断开）…');
+      _startScanWatchdog();
+    } catch (e) {
+      final msg = '续扫失败：$e';
+      _log(msg);
+      return msg;
+    }
+    return null;
+  }
+
   Future<String?> startScan({bool quiet = false}) async {
     final err = await _ensureReady();
     if (err != null) return err;
@@ -1667,6 +1770,8 @@ class BleCgmManager {
     await protocol.handleDevice(device, (reading) {
       _emitReading(reading); // 进 history 缓存，切页/重进不丢
       _linkWatchdog(); // 连接型也喂狗：有数=链路活，没数才报断链
+      _linkWatchdogFor(
+          reading.brand.displayName, reading.sensorId); // 硅基走分设备线（5分钟一点）
     }, _log);
     _connectedDevice = device;
     _setState(BleCgmState.connected);

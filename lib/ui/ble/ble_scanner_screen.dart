@@ -52,15 +52,17 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     _manager.onBackfilled = (_) {
       if (mounted) _reloadFromDb();
     };
-    // 页面开着就盯着：30 秒查一次，空洞 90 秒被看见、3 分钟报断链
+    // 页面开着就盯着：30 秒查一次，分设备分线判（微泰 90s/3min，硅基 6min/12min）。
+    // 断链重扫只重开扫描不碰 GATT：硅基连着时 stopScan/startScan 不影响已建连接，
+    // 之前 startScan → _detachListener → stopScan，全局停扫瞬间 GATT 被牵连掐断。
     _gapTimer =
         Timer.periodic(const Duration(seconds: 30), (_) {
       if (!mounted) return;
       _manager.checkDataGap(); // 日志在 logStream 里，页面自动显示
       if (_manager.checkLinkLost()) {
-        _log.add('断链提醒：3 分钟没新数了，自动重扫一次…');
+        _log.add('断链提醒：有设备超线没新数了，续扫一次（不断开已连设备）…');
         if (_log.length > 50) _log.removeAt(0);
-        _manager.startScan(quiet: true);
+        _manager.rescanKeepConnected(quiet: true);
       }
     });
     // manager 是单例常驻：先铺内存缓存，再从数据库补（App 重启也不丢）
