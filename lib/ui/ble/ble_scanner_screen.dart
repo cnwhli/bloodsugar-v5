@@ -544,7 +544,9 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     );
   }
 
-  // ---- 血糖列表按设备分组：同一发射器一节，各看各的 ----
+  // ---- 血糖列表按设备分页：几个发射器就几个 Tab，各看各的、好对比 ----
+  // 之前是 ExpansionTile 分组堆一页，两个设备混一起看不出谁是谁。
+  // 现在 TabBar 一个设备一页（2 个设备 2 页，3 个 3 页），Tab 标签带最新值。
   Widget _buildGroupedList() {
     // 分组 key：sensorId 有就用（微泰后6位/AAC…），没有按品牌分
     final groups = <String, List<GlucoseReading>>{};
@@ -555,44 +557,83 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
       groups.putIfAbsent(key, () => []).add(r);
     }
     final keys = groups.keys.toList();
-    return ListView.builder(
-      itemCount: keys.length > 4 ? 4 : keys.length, // 最多4节，防刷屏
-      itemBuilder: (context, gi) {
-        final key = keys[gi];
-        final items = groups[key]!;
-        final shown = items.length > 10 ? items.sublist(0, 10) : items;
-        return ExpansionTile(
-          initiallyExpanded: gi == 0, // 第一节默认展开
-          title: Text(
-            '$key（最新 ${shown.first.valueMmolL.toStringAsFixed(1)} · ${_fmtTime(shown.first.timestamp)}）',
-            style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.bold),
+    if (keys.isEmpty) return const SizedBox.shrink();
+    return DefaultTabController(
+      length: keys.length,
+      child: Column(
+        children: [
+          TabBar(
+            isScrollable: keys.length > 2,
+            labelColor: Colors.lightBlue,
+            unselectedLabelColor: Colors.white54,
+            labelStyle:
+                const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+            unselectedLabelStyle: const TextStyle(fontSize: 12),
+            tabs: keys.map((key) {
+              final items = groups[key]!;
+              final latest = items.first;
+              // Tab 标签：设备名 + 最新值（一眼看出谁高谁低）
+              final short = key.length > 14
+                  ? '…${key.substring(key.length - 14)}'
+                  : key;
+              return Tab(
+                text:
+                    '$short ${latest.valueMmolL.toStringAsFixed(1)}',
+              );
+            }).toList(),
           ),
-          children: shown.map((r) {
-            return ListTile(
-              dense: true,
-              title: Text(
-                '${r.valueMmolL.toStringAsFixed(1)} mmol/L',
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              subtitle: Text(_fmtTime(r.timestamp)),
-              trailing: Icon(
-                r.status == 'low'
-                    ? Icons.arrow_downward
-                    : r.status == 'high'
-                        ? Icons.arrow_upward
-                        : Icons.check_circle,
-                color: r.status == 'low'
-                    ? Colors.blue
-                    : r.status == 'high'
-                        ? Colors.red
-                        : Colors.green,
-              ),
-            );
-          }).toList(),
-        );
-      },
+          Expanded(
+            child: TabBarView(
+              children: keys.map((key) {
+                final items = groups[key]!;
+                final shown =
+                    items.length > 30 ? items.sublist(0, 30) : items;
+                return ListView.builder(
+                  itemCount: shown.length + 1,
+                  itemBuilder: (context, i) {
+                    if (i == 0) {
+                      // 页头：设备全名 + 点数，防 Tab 标签截断看不清
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        child: Text(
+                          '$key · 共 ${items.length} 点',
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.white54),
+                        ),
+                      );
+                    }
+                    final r = shown[i - 1];
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        '${r.valueMmolL.toStringAsFixed(1)} mmol/L',
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      subtitle:
+                          Text(_fmtTime(r.timestamp)),
+                      trailing: Icon(
+                        r.status == 'low'
+                            ? Icons.arrow_downward
+                            : r.status == 'high'
+                                ? Icons.arrow_upward
+                                : Icons.check_circle,
+                        color: r.status == 'low'
+                            ? Colors.blue
+                            : r.status == 'high'
+                                ? Colors.red
+                                : Colors.green,
+                      ),
+                    );
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

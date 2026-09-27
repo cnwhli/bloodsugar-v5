@@ -76,6 +76,34 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   final List<String> _diagLogs = [];
   bool _showDiag = false;
 
+  // ---- 按设备分页：几个发射器就几个数值页 ----
+  // key = 品牌 · 发射器（如"微泰 AiDEX · 22FJV7J"），和手机蓝牙页同口径。
+  final Map<String, _Dev> _devs = {};
+  List<String> get _devKeys => _devs.keys.toList();
+  // 数值页 + 历史 + 统计总页数（没数时 1 数值页 + 历史 + 统计 = 3）
+  int get _pageCount => (_devKeys.isEmpty ? 1 : _devKeys.length) + 2;
+  String _devKeyOf(String brand, String sensor) =>
+      sensor.isEmpty ? brand : '$brand · $sensor';
+  // 图例/行内短名：只留发射器尾段（如 22FJV7J），防圆屏挤爆
+  String _shortDev(String dev) {
+    final i = dev.indexOf('·');
+    final s = i >= 0 ? dev.substring(i + 1).trim() : dev;
+    return s.length > 8 ? '…${s.substring(s.length - 8)}' : s;
+  }
+
+  // 多设备配色（数值大字 + 历史曲线同色，一眼对上）
+  static const _devPalette = [
+    Colors.green,
+    Colors.cyan,
+    Colors.orange,
+    Colors.purple,
+    Colors.yellow,
+  ];
+  Color _devColor(String key) {
+    final i = _devKeys.indexOf(key);
+    return _devPalette[(i < 0 ? 0 : i) % _devPalette.length];
+  }
+
   static const double _lowThreshold = 3.9;
   static const double _highThreshold = 10.0;
 
@@ -91,7 +119,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     // 运动数据 5 分钟刷一次（抬腕看的是缓存值，不转菊花）
     _sportTimer = Timer.periodic(
         const Duration(minutes: 5), (_) => _loadSport());
-    // 实时订阅：新数进来表盘自动刷 + 推云（手表连发射器手机秒级看到）
+    // 实时订阅：新数进来 → 归到对应设备页 + 表盘自动刷 + 推云
     _subs.add(_manager.readingStream.listen((r) async {
       if (!mounted) return;
       _lastDataAt = DateTime.now(); // 看门狗喂食：有数=链路活着
@@ -116,12 +144,17 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       } catch (_) {}
       if (!mounted) return;
       setState(() {
+        // 主快照保持最新一条（兼容旧逻辑/预警震动）
         _mmolL = r.valueMmolL;
         _trend = r.trend;
         _brand = r.brandLabel;
         _updatedAt = r.timestamp;
         _hasData = true;
-        _hist.add(_Pt(r.valueMmolL, r.timestamp));
+        // 按设备归档：哪个发射器的数进哪个数值页
+        final key = _devKeyOf(r.brandLabel, r.sensorId);
+        _devs[key] = _Dev(r.valueMmolL, r.trend, r.brandLabel,
+            r.timestamp);
+        _hist.add(_Pt(r.valueMmolL, r.timestamp, key));
         if (_hist.length > 500) {
           _hist = _hist.sublist(_hist.length - 500);
         }
@@ -138,7 +171,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       if (_diagLogs.length > 50) _diagLogs.removeAt(0);
       if (_showDiag && mounted) setState(() {});
     }));
-    // 后台收数通知（手表息屏期间的数）：直接更新表盘，不用点开
+    // 后台收数通知（手表息屏期间的数）：归到对应设备页，不用点开
     _subs.add(BgSync.stream.listen((msg) {
       if (!mounted) return;
       try {
@@ -149,6 +182,21 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           _trend = d.trend;
           _updatedAt = d.ts;
           _hasData = true;
+          // BgSync 透了 sensorId：后台的数也归到发射器自己的页
+          final key = _devKeyOf('', d.sensorId);
+          final old = _devs[key];
+          if (old == null) {
+            _devs[key] =
+                _Dev(d.v, d.trend, _devKeyOf('', d.sensorId), d.ts);
+          } else {
+            old.v = d.v;
+            old.trend = d.trend;
+            old.ts = d.ts;
+          }
+          _hist.add(_Pt(d.v, d.ts, key));
+          if (_hist.length > 500) {
+            _hist = _hist.sublist(_hist.length - 500);
+          }
         });
         _buzzForLevel();
       } catch (_) {}
@@ -312,7 +360,8 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     } catch (_) {}
   }
 
-  /// 先读本机库最新一条 + 最近历史（手表独立用：自己扫自己存，不依赖手机）
+  /// 先读本机库最新一条 + 最近历史（手表独立用：自己扫自己存，不依赖手机）。
+  /// 历史按发射器归设备页：几个发射器启动就分几个数值页，3 个就 3 页。
   Future<void> _loadLocal() async {
     try {
       await AppDatabase.init();
@@ -321,13 +370,27 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           await AppDatabase.instance.readingsLast24h(limit: 288);
       if (!mounted) return;
       final pts = <_Pt>[];
+      final devLatest = <String, _Dev>{};
       for (final m in hist) {
         final v = (m['value_mmol_l'] as num?)?.toDouble();
         final t = DateTime.tryParse('${m['created_at'] ?? ''}');
-        if (v != null && v > 0 && t != null) pts.add(_Pt(v, t));
+        if (v != null && v > 0 && t != null) {
+          final brand = '${m['brand'] ?? ''}';
+          final sensor = '${m['sensor_id'] ?? ''}';
+          final key = _devKeyOf(brand, sensor);
+          pts.add(_Pt(v, t, key));
+          final tr = (m['trend'] as num?)?.toInt() ?? 0;
+          final old = devLatest[key];
+          if (old == null || t.isAfter(old.ts)) {
+            devLatest[key] = _Dev(v, tr, brand, t);
+          }
+        }
       }
       setState(() {
         _hist = pts;
+        _devs
+          ..clear()
+          ..addAll(devLatest);
         if (rows.isNotEmpty) {
           final ts =
               DateTime.tryParse('${rows.first['created_at'] ?? ''}');
@@ -512,26 +575,47 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           child: Column(
             children: [
               Expanded(
+                // 按设备分页：几个发射器就几个数值页（2 个 2 页，3 个 3 页），
+                // 后面再跟历史 + 统计。Tab 标签截断看不清的，页头有全名。
                 child: PageView(
                   controller: _pager,
                   onPageChanged: (i) => setState(() => _page = i),
                   children: [
-                    // 第 1 页：数值（点一下刷新血糖+运动，长按开关监听）
-                    GestureDetector(
-                      onTap: () async {
-                        await _loadLocal();
-                        await _refreshSport();
-                      },
-                      onLongPress: () async {
-                        HapticFeedback.heavyImpact();
-                        await _toggleScan();
-                      },
-                      child: SingleChildScrollView(
-                        child: _buildValuePage(
-                            statusColor: statusColor),
-                      ),
-                    ),
-                    // 第 2 页：历史（点一下切范围，长按开关监听）
+                    // 数值页：每个设备一页（没数时 1 页占位）
+                    if (_devKeys.isEmpty)
+                      GestureDetector(
+                        onTap: () async {
+                          await _loadLocal();
+                          await _refreshSport();
+                        },
+                        onLongPress: () async {
+                          HapticFeedback.heavyImpact();
+                          await _toggleScan();
+                        },
+                        child: SingleChildScrollView(
+                          child: _buildValuePage(
+                              statusColor: statusColor),
+                        ),
+                      )
+                    else
+                      for (final key in _devKeys)
+                        GestureDetector(
+                          onTap: () async {
+                            await _loadLocal();
+                            await _refreshSport();
+                          },
+                          onLongPress: () async {
+                            HapticFeedback.heavyImpact();
+                            await _toggleScan();
+                          },
+                          child: SingleChildScrollView(
+                            child: _buildDeviceValuePage(
+                              key,
+                              statusColor: statusColor,
+                            ),
+                          ),
+                        ),
+                    // 历史（点一下切范围，长按开关监听）
                     GestureDetector(
                       onTap: _cycleRange,
                       onLongPress: () async {
@@ -542,7 +626,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
                         child: _buildHistoryPage(),
                       ),
                     ),
-                    // 第 3 页：统计（点一下切 7/14/30，长按开关监听）
+                    // 统计（点一下切 7/14/30，长按开关监听）
                     GestureDetector(
                       onTap: _cycleLongRange,
                       onLongPress: () async {
@@ -555,13 +639,13 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
                     ),
                   ],
                 ),
-              ),
+              ), // Expanded(PageView 数值N页 + 历史 + 统计）结束
               const SizedBox(height: 4),
-              // 页点：3 个点，当前页高亮
+              // 页点：数值页（设备数）+ 历史 + 统计，当前页高亮
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(
-                  3,
+                  _pageCount,
                   (i) => Container(
                     width: 6,
                     height: 6,
@@ -581,6 +665,133 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           ),
         ),
       ),
+    );
+  }
+
+  /// 单设备数值页：这个发射器自己的值/趋势/时间（几个设备就几个页，
+  /// 左右滑切换对比；大字颜色按设备配色，不再只看红绿）。
+  /// 没数时的占位页复用旧 _buildValuePage（监听按钮 + 诊断都在那）。
+  Widget _buildDeviceValuePage(String key,
+      {required Color statusColor}) {
+    final d = _devs[key];
+    if (d == null) return _buildValuePage(statusColor: statusColor);
+    final devColor = _devColor(key);
+    final low = d.v < _lowThreshold;
+    final high = d.v > _highThreshold;
+    final small = widget.shape.isCircular ? 11.0 : 13.0;
+    final big = widget.shape.isCircular ? 30.0 : 38.0;
+    final warn = low || high;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 设备名行：全名 + 配色点（哪个页一目了然）
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: devColor,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                key,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: small, color: Colors.white70),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (warn)
+          Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: low ? Colors.blue : Colors.red,
+              borderRadius: BorderRadius.circular(
+                  widget.shape.isCircular ? 16 : 8),
+            ),
+            child: Text(
+              low ? '⚠️ 低血糖' : '⚠️ 高血糖',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: small + 2,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        if (warn) const SizedBox(height: 8),
+        Text(
+          d.v.toStringAsFixed(1),
+          style: TextStyle(
+            fontSize: big,
+            fontWeight: FontWeight.bold,
+            color: warn ? (low ? Colors.blue : Colors.red) : devColor,
+          ),
+        ),
+        Text(
+          '${(d.v * 18.0182).toStringAsFixed(0)} mg/dL ${_trendLabel(d.trend)}',
+          style: TextStyle(fontSize: small, color: Colors.grey),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          _fmtDateTime(DateTime.now()),
+          style: TextStyle(fontSize: small + 2, color: Colors.white70),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '${d.brand} · ${_fmtTime(d.ts)}',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: small, color: Colors.grey),
+        ),
+        const SizedBox(height: 8),
+        // 心率/步数卡片（和旧数值页一致，抬腕一眼全）
+        Container(
+          width: double.infinity,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white10,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _sportItem('❤', _bpm == null ? '--' : '$_bpm', 'bpm',
+                  small + 2, dim: _bpm == null),
+              _sportItem('👣', _fmtSteps(_steps), '步', small + 2,
+                  dim: _steps == null),
+              _sportItem('🏃', _workoutMin == null ? '--' : '$_workoutMin',
+                  '分钟', small + 2,
+                  dim: _workoutMin == null),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: FilledButton.icon(
+            onPressed: _toggleScan,
+            icon: Icon(
+              _lowPowerOn
+                  ? Icons.bluetooth_disabled
+                  : Icons.bluetooth_searching,
+              size: 20,
+            ),
+            label: Text(
+              _lowPowerOn ? '停止监听' : '手表监听',
+              style: const TextStyle(fontSize: 16),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
     );
   }
 
@@ -738,7 +949,9 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     );
   }
 
-  /// 第 2 页：历史曲线 + 最近 8 条（点一下切 3/6/12/24h）
+  /// 第 2 页：历史曲线 + 最近 8 条（点一下切 3/6/12/24h）。
+  /// 多设备同图分色画：每个发射器一条线 + 图例（短名 + 配色点），
+  /// 一眼看出两个仪器的差。对不上号是之前最大的槽点。
   Widget _buildHistoryPage() {
     final small = widget.shape.isCircular ? 10.0 : 12.0;
     final cut =
@@ -777,11 +990,41 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     }
     final avg = sum / pts.length;
     final tail = pts.length > 8 ? pts.sublist(pts.length - 8) : pts;
+    // 图例：出现过的设备各一个配色点 + 短名（和数值页同色）
+    final legendDevs =
+        pts.map((p) => p.dev).where((d) => d.isNotEmpty).toSet().toList();
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text('近 $_rangeH 小时 · ${pts.length} 点',
             style: TextStyle(fontSize: small, color: Colors.grey)),
+        if (legendDevs.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 10,
+            children: legendDevs.map((d) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _devColor(d),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(_shortDev(d),
+                      style: TextStyle(
+                          fontSize: small - 1,
+                          color: Colors.white70)),
+                ],
+              );
+            }).toList(),
+          ),
+        ],
         const SizedBox(height: 4),
         SizedBox(
           height: widget.shape.isCircular ? 110 : 150,
@@ -791,6 +1034,9 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
               pts: pts,
               low: _lowThreshold,
               high: _highThreshold,
+              colors: {
+                for (final d in legendDevs) d: _devColor(d),
+              },
             ),
           ),
         ),
@@ -812,25 +1058,53 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           style: TextStyle(fontSize: small - 1, color: Colors.white70),
         ),
         const SizedBox(height: 6),
-        // 最近 8 条列表（时间 + 数值，一行一条）
+        // 最近 8 条列表（时间 + 数值 + 归属短名，一行一条，对得上号）
         ...tail.reversed.map((p) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 3),
               child: Row(
                 mainAxisAlignment:
                     MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(_fmtTime(p.t),
-                      style: TextStyle(
-                          fontSize: small, color: Colors.grey)),
-                  Text(p.v.toStringAsFixed(1),
-                      style: TextStyle(
-                          fontSize: small + 2,
-                          fontWeight: FontWeight.bold,
-                          color: p.v < _lowThreshold
-                              ? Colors.blue
-                              : p.v > _highThreshold
-                                  ? Colors.red
-                                  : Colors.white)),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (p.dev.isNotEmpty)
+                        Container(
+                          width: 6,
+                          height: 6,
+                          margin:
+                              const EdgeInsets.only(right: 4),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _devColor(p.dev),
+                          ),
+                        ),
+                      Text(_fmtTime(p.t),
+                          style: TextStyle(
+                              fontSize: small,
+                              color: Colors.grey)),
+                    ],
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (p.dev.isNotEmpty)
+                        Text(_shortDev(p.dev),
+                            style: TextStyle(
+                                fontSize: small - 1,
+                                color: Colors.white54)),
+                      const SizedBox(width: 6),
+                      Text(p.v.toStringAsFixed(1),
+                          style: TextStyle(
+                              fontSize: small + 2,
+                              fontWeight: FontWeight.bold,
+                              color: p.v < _lowThreshold
+                                  ? Colors.blue
+                                  : p.v > _highThreshold
+                                      ? Colors.red
+                                      : Colors.white)),
+                    ],
+                  ),
                 ],
               ),
             )),
@@ -965,15 +1239,32 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
 class _Pt {
   final double v;
   final DateTime t;
-  _Pt(this.v, this.t);
+  // 发射器归属（品牌 · 传感器，空=未知/老数据），多设备曲线分色用
+  final String dev;
+  _Pt(this.v, this.t, [this.dev = '']);
 }
 
-/// 火花线：血糖曲线 + 3.9/10.0 阈值虚线
+/// 单设备快照（数值页一页一个：值/趋势/品牌/时间）
+class _Dev {
+  double v;
+  int trend;
+  String brand;
+  DateTime ts;
+  _Dev(this.v, this.trend, this.brand, this.ts);
+}
+
+/// 火花线：血糖曲线 + 3.9/10.0 阈值虚线。
+/// 多设备分色：colors[dev] 给该发射器的线色，没给的走默认绿。
 class _SparkPainter extends CustomPainter {
   final List<_Pt> pts;
   final double low;
   final double high;
-  _SparkPainter({required this.pts, required this.low, required this.high});
+  final Map<String, Color> colors;
+  _SparkPainter(
+      {required this.pts,
+      required this.low,
+      required this.high,
+      this.colors = const {}});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1001,20 +1292,41 @@ class _SparkPainter extends CustomPainter {
       }
     }
 
-    final line = Paint()
-      ..color = Colors.green
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-    final path = Path();
+    // 按发射器分组画线：各设备各一条，颜色和数值页/图例对上。
+    // 组内单点画圆点（不够连线时不断线假象）。
+    final order = <String>[];
+    final byDev = <String, List<int>>{};
     for (var i = 0; i < pts.length; i++) {
-      final p = Offset(x(i), y(pts[i].v));
-      if (i == 0) {
-        path.moveTo(p.dx, p.dy);
-      } else {
-        path.lineTo(p.dx, p.dy);
+      final d = pts[i].dev;
+      if (!byDev.containsKey(d)) {
+        byDev[d] = [];
+        order.add(d);
       }
+      byDev[d]!.add(i);
     }
-    canvas.drawPath(path, line);
+    for (final d in order) {
+      final idx = byDev[d]!;
+      final c = colors[d] ?? Colors.green;
+      final line = Paint()
+        ..color = c
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke;
+      if (idx.length == 1) {
+        canvas.drawCircle(
+            Offset(x(idx.first), y(pts[idx.first].v)), 2.5, line..style = PaintingStyle.fill);
+        continue;
+      }
+      final path = Path();
+      for (var k = 0; k < idx.length; k++) {
+        final p = Offset(x(idx[k]), y(pts[idx[k]].v));
+        if (k == 0) {
+          path.moveTo(p.dx, p.dy);
+        } else {
+          path.lineTo(p.dx, p.dy);
+        }
+      }
+      canvas.drawPath(path, line);
+    }
     // 超限红点
     final dot = Paint()..color = Colors.red;
     for (var i = 0; i < pts.length; i++) {
