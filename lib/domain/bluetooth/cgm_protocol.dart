@@ -34,6 +34,7 @@ import 'dart:typed_data';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/datasource/local_db.dart';
 import 'libre2_crypto.dart';
 import 'sibionics_crypto.dart';
@@ -706,6 +707,11 @@ class SibionicsProtocol extends CgmProtocol {
               trend: p['trend']!,
               brand: brand,
               minFromStart: p['index'],
+              // 硅基 sensorId = 蓝牙名（如 LT2408LBFL）：分组列表/去重靠它认设备，
+              // 不带就和微泰混一起分不开
+              sensorId: device.platformName.isNotEmpty
+                  ? device.platformName.toUpperCase()
+                  : device.remoteId.toString(),
             ));
           }
           // 要下一批：nextid = lastIndex + 1
@@ -745,6 +751,8 @@ class SibionicsProtocol extends CgmProtocol {
       try {
         await device.disconnect();
       } catch (_) {}
+      rethrow; // 必须抛出去：不抛调用方以为连上了（打"已连接"、挂断线监听），
+      // 实际 notify 从没订阅——"已连接→断开→10秒重连"死循环 + "无FF31/FF32"刷屏的病根
     }
   }
 }
@@ -858,6 +866,15 @@ class OttaiM8Protocol extends CgmProtocol {
   }
 }
 
+/// 最近扫到的可连设备（页面多选用）：蓝牙名 + 信号 + mac。
+class SeenDevice {
+  final String name;
+  final int rssi;
+  final String mac;
+  final String brandLabel;
+  const SeenDevice(this.name, this.rssi, this.mac, this.brandLabel);
+}
+
 // ==================== BLE CGM 管理器 ====================
 class BleCgmManager {
   static final BleCgmManager _instance = BleCgmManager._internal();
@@ -879,6 +896,63 @@ class BleCgmManager {
   ];
 
   List<CgmProtocol> get protocols => List.unmodifiable(_protocols);
+
+  // ---- 手动选设备（用户要求）：选中的蓝牙名白名单，存本机，下次自动认 ----
+  // 空 = 自动模式（老行为，见谁连谁）；非空 = 只连白名单里的，别的只看不连。
+  // 微泰是广播型不受影响（照样收数）；只管住"连接型"（硅基/Libre/Dexcom）。
+  static const _kSelectedDevices = 'ble_selected_devices';
+  Set<String> _selectedNames = {};
+
+  /// 选中的设备名（大写）。空 = 自动模式。
+  Set<String> get selectedNames => Set.unmodifiable(_selectedNames);
+
+  bool get isManualSelect =>
+      _selectedNames.isNotEmpty; // 手动模式：只连白名单
+
+  /// 启动时调一次：把上次选的读回来。
+  Future<void> loadSelectedDevices() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _selectedNames = (prefs.getStringList(_kSelectedDevices) ?? const [])
+          .map((e) => e.toUpperCase())
+          .toSet();
+    } catch (_) {}
+  }
+
+  /// 设白名单（页面多选后调）。传空 = 回自动模式。
+  Future<void> setSelectedDevices(Set<String> names) async {
+    _selectedNames = names.map((e) => e.toUpperCase()).toSet();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_kSelectedDevices, _selectedNames.toList());
+    } catch (_) {}
+    _log(_selectedNames.isEmpty
+        ? '已切回自动模式：见谁连谁'
+        : '已锁定设备：${_selectedNames.join('、')}（别的只看不连）');
+  }
+
+  /// 最近扫到的可连设备（名 → rssi/mac），页面多选用。只收录有名字的，
+  /// 无名广播不进（名字都没有没法选）。每次扫描自动更新。
+  final Map<String, SeenDevice> _seenDevices = {};
+  Map<String, SeenDevice> get seenDevices => Map.unmodifiable(_seenDevices);
+
+  /// 可选设备列表变化通知：页面订阅后自动刷新多选区。
+  /// _seenDevices 每轮扫描都在变，用节流通知（60秒一次）免得页面狂刷。
+  final _seenDevicesController = StreamController<int>.broadcast();
+  Stream<int> get seenDevicesStream => _seenDevicesController.stream;
+  bool _seenDevicesDirty = false;
+  DateTime _lastSeenNotify = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _notifySeenDevices() {
+    if (!_seenDevicesDirty) return;
+    final now = DateTime.now();
+    if (now.difference(_lastSeenNotify).inSeconds < 10) return;
+    _lastSeenNotify = now;
+    _seenDevicesDirty = false;
+    if (!_seenDevicesController.isClosed) {
+      _seenDevicesController.add(_seenDevices.length);
+    }
+  }
 
   final Set<String> _connecting = {};
   // 连接退避：同一设备 90 秒内只试连一次。之前失败/断开后每次广播都
@@ -1177,6 +1251,26 @@ class BleCgmManager {
             });
           } else {
             if (_connecting.contains(id)) continue;
+            // 手动选设备：白名单非空时，只连选中的；别的只看不连。
+            // 微泰广播型走上面分支不受影响；这里只管连接型（硅基/Libre/Dexcom），
+            // 不再"见谁连谁"乱找。
+            final devName = advName.isEmpty ? id : advName;
+            if (isManualSelect &&
+                !_selectedNames.contains(devName.toUpperCase())) {
+              // 收录进可选列表（页面多选用），但不连
+              if (advName.isNotEmpty) {
+                _seenDevices[advName.toUpperCase()] = SeenDevice(
+                    advName, r.rssi, id, protocol.brand.displayName);
+                _seenDevicesDirty = true;
+              }
+              continue;
+            }
+            // 自动模式也收录：页面能看到"附近都有谁"
+            if (advName.isNotEmpty) {
+              _seenDevices[advName.toUpperCase()] = SeenDevice(
+                  advName, r.rssi, id, protocol.brand.displayName);
+              _seenDevicesDirty = true;
+            }
             // 退避：失败/断开过的设备别见面就连。之前每次广播都立刻重连，
             // 每次重连 stopScan 几秒——微泰广播在这几秒里全丢，
             // 硅基反复连不上时微泰被连带饿死，"连着连着都没数了"。
@@ -1215,6 +1309,7 @@ class BleCgmManager {
               'AiDEX诊断：看到名字但包结构对不上（service/厂家数据缺失）——'
               '多是微泰官方App在手机上占着发射器，或手表离得远包被截断');
         }
+        _notifySeenDevices(); // 可选设备有更新就通知页面（节流10秒）
       }
     });
   }
@@ -1419,6 +1514,7 @@ class BleCgmManager {
     _stateController.close();
     _readingController.close();
     _logController.close();
+    _seenDevicesController.close();
     disconnect();
   }
 }

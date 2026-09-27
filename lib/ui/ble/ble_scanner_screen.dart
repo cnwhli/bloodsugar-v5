@@ -33,6 +33,10 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   String _statusText = '就绪';
   List<String> _log = [];
   final List<StreamSubscription> _subs = [];
+  // 手动选设备：扫到的可连设备多选 + 白名单开关（默认自动模式见谁连谁）
+  Set<String> _picked = {}; // 页面勾选（大写名）；点"只连选中的"才生效
+  Map<String, SeenDevice> _seen = {};
+  bool _manualOn = false;
   // 分钟级断流盯防：页面开着时每 30 秒查一次 manager，没新数就打日志、
   // 3 分钟报断链。之前 checkLinkLost/checkDataGap 写了但没人调——
   // 这就是"23:32→23:25 七分钟空洞"全程静默无感知的病根。
@@ -60,6 +64,19 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     // manager 是单例常驻：先铺内存缓存，再从数据库补（App 重启也不丢）
     _readings = List.of(_manager.history);
     _reloadFromDb();
+    // 手动选设备：读回上次白名单 + 订阅可选设备更新
+    _manager.loadSelectedDevices().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _manualOn = _manager.isManualSelect;
+        _picked = Set.of(_manager.selectedNames);
+        _seen = Map.of(_manager.seenDevices);
+      });
+    });
+    _subs.add(_manager.seenDevicesStream.listen((_) {
+      if (!mounted) return;
+      setState(() => _seen = Map.of(_manager.seenDevices));
+    }));
     _statusText = _manager.state.toString().split('.').last;
     _subs.add(_manager.stateStream.listen((state) {
       if (!mounted) return;
@@ -287,6 +304,131 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     }
   }
 
+  // ---- 手动选设备区： nearby 可连设备多选 + 锁定开关 ----
+  Widget _buildDevicePicker() {
+    if (_seen.isEmpty && !_manualOn) return const SizedBox.shrink();
+    final names = _seen.keys.toList()..sort();
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey[700]!),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('附近设备（勾选后点锁定，只连选中的）',
+                  style: TextStyle(fontSize: 12, color: Colors.white70)),
+              const Spacer(),
+              TextButton(
+                onPressed: (_picked.isEmpty && !_manualOn)
+                    ? null
+                    : () async {
+                        if (_manualOn && _picked.isEmpty) {
+                          // 已锁定但全取消 = 回自动
+                          await _manager.setSelectedDevices({});
+                          if (!mounted) return;
+                          setState(() {
+                            _manualOn = false;
+                            _picked = {};
+                          });
+                          return;
+                        }
+                        await _manager.setSelectedDevices(_picked);
+                        if (!mounted) return;
+                        setState(() => _manualOn = _picked.isNotEmpty);
+                      },
+                child: Text(_manualOn ? '已锁定（点我改选/全取消回自动）' : '只连选中的'),
+              ),
+            ],
+          ),
+          if (_manualOn)
+            Text('锁定中：${_manager.selectedNames.join('、')}',
+                style: const TextStyle(fontSize: 12, color: Colors.green)),
+          ...names.map((k) {
+            final d = _seen[k]!;
+            final checked = _picked.contains(k);
+            return CheckboxListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text('${d.name}（${d.rssi}dBm）',
+                  style: const TextStyle(fontSize: 13)),
+              subtitle: Text('${d.brandLabel} · ${d.mac}',
+                  style:
+                      const TextStyle(fontSize: 11, color: Colors.white54)),
+              value: checked,
+              onChanged: (v) {
+                setState(() {
+                  if (v == true) {
+                    _picked.add(k);
+                  } else {
+                    _picked.remove(k);
+                  }
+                });
+              },
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  // ---- 血糖列表按设备分组：同一发射器一节，各看各的 ----
+  Widget _buildGroupedList() {
+    // 分组 key：sensorId 有就用（微泰后6位/AAC…），没有按品牌分
+    final groups = <String, List<GlucoseReading>>{};
+    for (final r in _readings) {
+      final key = r.sensorId.isNotEmpty
+          ? '${r.brandLabel} · ${r.sensorId}'
+          : r.brandLabel;
+      groups.putIfAbsent(key, () => []).add(r);
+    }
+    final keys = groups.keys.toList();
+    return ListView.builder(
+      itemCount: keys.length > 4 ? 4 : keys.length, // 最多4节，防刷屏
+      itemBuilder: (context, gi) {
+        final key = keys[gi];
+        final items = groups[key]!;
+        final shown = items.length > 10 ? items.sublist(0, 10) : items;
+        return ExpansionTile(
+          initiallyExpanded: gi == 0, // 第一节默认展开
+          title: Text(
+            '$key（最新 ${shown.first.valueMmolL.toStringAsFixed(1)} · ${_fmtTime(shown.first.timestamp)}）',
+            style: const TextStyle(
+                fontSize: 14, fontWeight: FontWeight.bold),
+          ),
+          children: shown.map((r) {
+            return ListTile(
+              dense: true,
+              title: Text(
+                '${r.valueMmolL.toStringAsFixed(1)} mmol/L',
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(_fmtTime(r.timestamp)),
+              trailing: Icon(
+                r.status == 'low'
+                    ? Icons.arrow_downward
+                    : r.status == 'high'
+                        ? Icons.arrow_upward
+                        : Icons.check_circle,
+                color: r.status == 'low'
+                    ? Colors.blue
+                    : r.status == 'high'
+                        ? Colors.red
+                        : Colors.green,
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -434,7 +576,9 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
               ],
             ),
           ),
-          // 最近读数
+          // 手动选设备区：扫到的可连设备多选，"只连选中的"锁定
+          _buildDevicePicker(),
+          // 最近读数（按设备分组：微泰/硅基各看各的，不再混一条线）
           Expanded(
             child: _readings.isEmpty
                 ? const Center(
@@ -444,37 +588,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                       style: TextStyle(color: Colors.grey),
                     ),
                   )
-                : ListView.builder(
-                    itemCount:
-                        _readings.length > 20 ? 20 : _readings.length,
-                    itemBuilder: (context, i) {
-                      final r = _readings[i];
-                      return ListTile(
-                        title: Text(
-                          '${r.valueMmolL.toStringAsFixed(1)} mmol/L',
-                          style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Text(
-                          // 时间精确到秒 + 日期（跨天也能看出来）
-                          '${r.brandLabel} · ${_fmtTime(r.timestamp)}',
-                        ),
-                        trailing: Icon(
-                          r.status == 'low'
-                              ? Icons.arrow_downward
-                              : r.status == 'high'
-                                  ? Icons.arrow_upward
-                                  : Icons.check_circle,
-                          color: r.status == 'low'
-                              ? Colors.blue
-                              : r.status == 'high'
-                                  ? Colors.red
-                                  : Colors.green,
-                        ),
-                      );
-                    },
-                  ),
+                : _buildGroupedList(),
           ),
           // 日志（底部）：深色模式强制深底浅字（之前白底在深色模式看不见）
           Container(
