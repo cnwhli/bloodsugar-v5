@@ -311,8 +311,11 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
 
   Widget _buildDevicePicker() {
     final names = _seen.keys.toList()..sort();
+    // 显示以 manager 白名单为准：之前用本地 _manualOn，set 后不同步就
+    // 显示"未锁定"，看着像没生效——"选了还是未锁定"的病根之一。
     final locked = _manager.selectedNames;
-    final summary = _manualOn
+    final isLocked = locked.isNotEmpty;
+    final summary = isLocked
         ? '锁定：${locked.join('、')}'
         : (_seen.isEmpty ? '扫描中…' : '附近 ${_seen.length} 台，未锁定（自动模式）');
     return Container(
@@ -354,32 +357,32 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                         TextStyle(fontSize: 12, color: Colors.white70)),
                 const Spacer(),
                 TextButton(
-                  onPressed: (_picked.isEmpty && !_manualOn)
+                  // 点了就写白名单：以 manager 返回为准刷新本地状态，
+                  // 不再"点了显示未锁定"。全取消 = 回自动模式。
+                  onPressed: (_picked.isEmpty && !isLocked)
                       ? null
                       : () async {
-                          if (_manualOn && _picked.isEmpty) {
+                          if (isLocked && _picked.isEmpty) {
                             // 已锁定但全取消 = 回自动
                             await _manager.setSelectedDevices({});
-                            if (!mounted) return;
-                            setState(() {
-                              _manualOn = false;
-                              _picked = {};
-                            });
-                            return;
+                          } else {
+                            await _manager.setSelectedDevices(_picked);
                           }
-                          await _manager.setSelectedDevices(_picked);
                           if (!mounted) return;
-                          setState(
-                              () => _manualOn = _picked.isNotEmpty);
+                          setState(() {
+                            _manualOn = _manager.isManualSelect;
+                            _picked = Set.of(_manager.selectedNames);
+                            _seen = Map.of(_manager.seenDevices);
+                          });
                         },
-                  child: Text(_manualOn
+                  child: Text(isLocked
                       ? '已锁定（点我改选/全取消回自动）'
                       : '只连选中的'),
                 ),
               ],
             ),
-          if (_pickerOpen && _manualOn)
-            Text('锁定中：${_manager.selectedNames.join('、')}',
+          if (_pickerOpen && isLocked)
+            Text('锁定中：${locked.join('、')}',
                 style: const TextStyle(fontSize: 12, color: Colors.green)),
           // 限高独立滚动：附近蓝牙多时多选区自己滚，不把血糖列表挤没——
           // "下面的内容都显示不了"的另一半病根（manager 侧已限 30 个）
