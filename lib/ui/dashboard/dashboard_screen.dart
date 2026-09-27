@@ -428,7 +428,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Colors.green;
   }
 
-  /// 数据库时间 "YYYY-MM-DD HH:MM:SS" → 今天显示 HH:MM:SS，跨天显示 MM-DD HH:MM
+  /// 数据库时间 "YYYY-MM-DD HH:MM:SS" → 今天显示 HH:MM:SS，
+  /// 跨天显示 MM-DD HH:MM（用户要求：血糖必须能看到日期和时间，
+  /// 同一天只看时间不够——半夜跨天的数、补传的旧数不看日期会误判）。
   String _fmtDbTime(String s) {
     if (s.isEmpty) return '';
     try {

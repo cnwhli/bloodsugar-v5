@@ -1171,7 +1171,7 @@ class BleCgmManager {
   // 页面切换/切后台不丢数据：读数缓存在 manager（单例）里，页面只订阅显示
   final List<GlucoseReading> _history = [];
   final List<String> _logHistory = [];
-  List<String> get history => List.unmodifiable(_history);
+  List<GlucoseReading> get history => List.unmodifiable(_history);
   List<String> get logHistory => List.unmodifiable(_logHistory);
   // 本机当前 GATT 直连的设备名（手表页用它区分"手表直连"和"手机同步"：
   // 云下行来的数也会建设备页，不标来源就以为"手表莫名连上了硅基"）。

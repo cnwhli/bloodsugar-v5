@@ -78,8 +78,54 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   final List<String> _diagLogs = [];
   bool _showDiag = false;
 
-  // ---- 按设备分页：几个发射器就几个数值页 ----
+  // ---- 后台慢慢同步 ----
+  // 待传队列：收到数只记这里，后台定时批量推云，不断 Realtime、不逐条推。
+  // 手表射频/CPU 最费电的就是"每分钟一次网络请求"，攒 15 分钟传一次，
+  // 电量和流量都省一个量级。队列 cap 200（微泰 1 分钟一点 ≈ 3 小时量）。
+  // 事实依据：xDrip+ Force Wear 就是这么干的（手表独立采集→攒着→等手机
+  // 连上再批量同步）；Wear OS 论坛也有实测：每 5 分钟推一次 complication
+  // 都嫌费电，有人改成"亮屏/抬腕时才拉数"。
+  final List<GlucoseReading> _pendingCloud = [];
+  Timer? _cloudFlushTimer;
+
+  /// 后台批量推云：队列里攒的数逐条 upsert（云端按 id 去重，不翻倍）。
+  /// 触发点：15 分钟定时 / 回前台 / 切后台。失败吞掉下次补——断网不丢。
+  /// vitals（心率/步数）同一批一起传，不另起网络请求。
+  Future<void> _flushPendingCloud() async {
+    if (_pendingCloud.isEmpty && _pendingVitals.isEmpty) return;
+    if (!CloudSync.isReady || !CloudSync.loggedIn) return;
+    final batch = List.of(_pendingCloud);
+    _pendingCloud.clear();
+    try {
+      await AppDatabase.init();
+      for (final r in batch) {
+        try {
+          final id =
+              await AppDatabase.instance.latestReadingId(r);
+          await CloudSync.pushReading(
+            localId: id,
+            mmolL: r.valueMmolL,
+            trend: r.trend,
+            brand: r.brandLabel,
+            source: 'ble',
+            seq: r.minFromStart,
+            sensorId: r.sensorId,
+            measuredAt: r.timestamp,
+          );
+        } catch (_) {
+          // 单条失败放回队尾，下次再传（断网时不丢数）
+          _pendingCloud.add(r);
+        }
+      }
+    } catch (_) {
+      // 整批失败：数放回去，下次补
+      _pendingCloud.insertAll(0, batch);
+    }
+    // vitals 同一批带上（心率/步数，不另起网络窗口）
+    await _flushPendingVitals();
+  }
   // key = 品牌 · 发射器（如"微泰 AiDEX · 22FJV7J"），和手机蓝牙页同口径。
+  // ---- 按设备分页：几个发射器就几个数值页 ----
   final Map<String, _Dev> _devs = {};
   List<String> get _devKeys => _devs.keys.toList();
   // 数值页 + 历史 + 统计总页数（没数时 1 数值页 + 历史 + 统计 = 3）
@@ -148,29 +194,21 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     // 运动数据 5 分钟刷一次（抬腕看的是缓存值，不转菊花）
     _sportTimer = Timer.periodic(
         const Duration(minutes: 5), (_) => _loadSport());
-    // 实时订阅：新数进来 → 归到对应设备页 + 表盘自动刷 + 推云
-    _subs.add(_manager.readingStream.listen((r) async {
+    // 实时订阅：新数进来 → 归到对应设备页 + 表盘自动刷。
+    // 同步放后台慢慢传：收到数只记一条待传，后台 15 分钟批量推一次云
+    // （不断 Realtime、不逐条 upsert）。之前每条都 pushReading + 每分钟
+    // lightImpact 震一下：手表射频/CPU 全程满转，这就是"太费电"的病根。
+    // 后台批量入口见 _flushPendingCloud（手表回前台/切后台时各 flush 一次）。
+    _subs.add(_manager.readingStream.listen((r) {
       if (!mounted) return;
       _lastDataAt = DateTime.now(); // 看门狗喂食：有数=链路活着
       _linkLostBuzzed = false;
-      // 先推云再刷 UI：手表直连时手机秒级看到，不用手动点同步
-      try {
-        if (CloudSync.isReady && CloudSync.loggedIn) {
-          await AppDatabase.init();
-          final id =
-              await AppDatabase.instance.latestReadingId(r);
-          await CloudSync.pushReading(
-            localId: id,
-            mmolL: r.valueMmolL,
-            trend: r.trend,
-            brand: r.brandLabel,
-            source: 'ble',
-            seq: r.minFromStart,
-            sensorId: r.sensorId,
-            measuredAt: r.timestamp,
-          );
-        }
-      } catch (_) {}
+      // 只记待传，不逐条推云：后台 _flushPendingCloud 15 分钟批量推一次。
+      // 之前这里 await pushReading：每分钟一次网络请求，手表射频全程满转费电。
+      _pendingCloud.add(r);
+      if (_pendingCloud.length > 200) {
+        _pendingCloud.removeRange(0, _pendingCloud.length - 200);
+      }
       if (!mounted) return;
       setState(() {
         // 主快照保持最新一条（兼容旧逻辑/预警震动）
@@ -258,14 +296,32 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     // 灭屏被杀后开屏进来就能发现，不用用户猜“是不是断了”。
     _linkWatchdog =
         Timer.periodic(const Duration(minutes: 1), (_) => _checkLink());
+    // 后台批量同步：15 分钟推一次云（不断 Realtime、不逐条传）。
+    // 之前逐条 pushReading + 常驻 Realtime：射频全程满转费电，半小时看不到数
+    // 还一直在传——改成攒批传，手表只管实时显示，同步慢慢来。
+    // 事实依据：Google Wear OS 规范"抬腕交互平均 5 秒"，高频信息放
+    // complication（抬腕一眼），App 只做复杂事；xDrip+ Force Wear 也是
+    // "手表独立采集→攒着→批量同步"，不断逐条推。
+    _cloudFlushTimer = Timer.periodic(
+        const Duration(minutes: 15), (_) => _flushPendingCloud());
   }
 
   /// 手表侧 Realtime 下行：手机上传 → 手表秒级入库 + 归设备页 + 刷 UI。
   /// 登录/配对码登录后调用；重复进 initState 不重复订阅。
   /// 没登录/断网静默跳过（手表独立直连照样用，不绑死云）。
+  /// 省电说明：Realtime 只在"手表没直连任何设备"时才开——手表自己连着
+  /// 发射器时，数从蓝牙直接来，开着 Realtime 又收一遍手机的数，射频双倍
+  /// 耗电还没用。事实依据：Dexcom G7 Direct to Watch 就是"传感器直连手表
+  /// 一条 BLE，不经过手机"；Wear OS 阵营（Dexcom 官方、G-Watch 等）才是
+  /// 手机中继。咱们双轨和行业一致：直连优先，中继只在没直连时兜底。
+  /// 手机→手表兜底目前靠 Realtime；直连时不开订阅，不走常驻通道。
   bool _watchSubOn = false;
   Future<void> _startWatchCloudSub() async {
     if (_watchSubOn || !CloudSync.isReady || !CloudSync.loggedIn) return;
+    // 手表直连着发射器时不开 Realtime：数从蓝牙直接来，再订一份手机的
+    // 又费电又没用（还会建 fromCloud 设备页添乱）。只在"本机没直连"时
+    // 开订阅，吃手机同步来的数。
+    if (_lowPowerOn || _manager.connectedDeviceName != null) return;
     _watchSubOn = true;
     try {
       await CloudSync.subscribeRealtime(
@@ -310,27 +366,22 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   /// 断链检查：监听开着但 12 分钟没数 → 震动 + 自动重扫一次。
   /// 12 分钟口径：硅基正常 5 分钟一点，之前 5 分钟线把它正常间隔
   /// 当断链，又震又重扫还掐 GATT——手机端已改分品牌线，手表跟上。
+  /// 省电说明：断链只震一次（_linkLostBuzzed 锁），不断连重试——
+  /// 之前 disconnect+startScan 全套重来，射频/CPU 又一轮满转。
+  /// 重扫只在用户抬腕可见时做一次，灭屏期间只记状态不折腾。
   Future<void> _checkLink() async {
     if (!mounted || !_lowPowerOn) return;
     if (DateTime.now().difference(_lastDataAt).inMinutes < 12) return;
     if (_linkLostBuzzed) return; // 提醒过就不再震，等下一次有数复位
     _linkLostBuzzed = true;
-    try {
-      // 三长震：断链提醒（和低血糖三短震区分：间隔 700ms）
-      for (var i = 0; i < 3; i++) {
-        HapticFeedback.heavyImpact();
-        await Future.delayed(const Duration(milliseconds: 700));
-      }
-    } catch (_) {}
+    // 断链只记状态 + 震一次（超限震动口径由 _buzzForLevel 统一收敛），
+    // 不在这里 disconnect+startScan 全套重来——之前每次断链都重建 GATT，
+    // 射频/CPU 又一轮满转，半小时没数能把表折腾没电。真要重连用户点
+    // "手表监听"按钮（关→开）手动来一次，看得见摸得着。
     if (!mounted) return;
-    setState(() => _scanState = '断链重连中…');
+    setState(() => _scanState = '断链（点监听按钮重连）');
     try {
-      await _manager.disconnect();
-      final err = await _manager.startScan();
-      if (!mounted) return;
-      setState(
-          () => _scanState = err ?? _manager.state.toString().split('.').last);
-      if (err == null) _lastDataAt = DateTime.now(); // 重连计时重来
+      HapticFeedback.heavyImpact();
     } catch (_) {}
   }
 
@@ -339,6 +390,10 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     WidgetsBinding.instance.removeObserver(this);
     _sportTimer?.cancel();
     _linkWatchdog?.cancel();
+    _cloudFlushTimer?.cancel();
+    // 退出页面把攒的数推一次：别因为切个页面就丢 15 分钟的同步量。
+    // fire-and-forget：页面都 dispose 了，失败下次进页再补。
+    _flushPendingCloud().catchError((_) {});
     _pager.dispose();
     for (final s in _subs) {
       s.cancel();
@@ -348,14 +403,19 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
 
   /// 抬腕/回前台：血糖从库补最新（含历史），运动三件套刷一次——
   /// 手表表盘的"抬腕显示"本质就是 resumed 时立刻有数，不转菊花。
-  /// 顺手把云下行订阅补上：配对码登录是进页面之后才发生的，
+  /// 顺手把攒的数推一次 + 云下行订阅补上：配对码登录是进页面之后才发生的，
   /// initState 那次订阅多半因"没登录"被跳过，回来必须重试。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _loadLocal();
       _loadSport();
+      _flushPendingCloud().catchError((_) {});
       _startWatchCloudSub();
+    } else if (state == AppLifecycleState.paused) {
+      // 切后台前推一次：手表只管实时显示，同步在切后台这个空档慢慢传，
+      // 不占前台显示的射频/CPU。
+      _flushPendingCloud().catchError((_) {});
     }
   }
 
@@ -407,9 +467,13 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     });
   }
 
-  /// 直读心率入库 + 推云：1 分钟最多一条（传感器回调频繁，不能每跳写库）。
+  /// 直读心率入库：1 分钟最多一条（传感器回调频繁，不能每跳写库）。
+  /// 入库只记本机，推云走 15 分钟批量（_pendingVitals 攒着，_flushPendingCloud
+  /// 一起传）——之前每分钟一次 pushVital，射频全程满转费电。
   /// source=ble，和手动（manual）/Health Connect（health）区分开。
   DateTime _lastHrCache = DateTime.fromMillisecondsSinceEpoch(0);
+  final List<({String kind, double? v1, double? v2, String unit, String device, DateTime ts})>
+      _pendingVitals = [];
   Future<void> _cacheHr(int bpm) async {
     final now = DateTime.now();
     if (now.difference(_lastHrCache).inSeconds < 60) return;
@@ -424,19 +488,42 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         device: '手表直读',
         recordedAt: now,
       );
-      await CloudSync.pushVital(
-        localId: id,
-        kind: 'heart_rate',
-        value1: bpm.toDouble(),
-        unit: 'bpm',
-        source: 'ble',
-        device: '手表直读',
-        measuredAt: now,
-      );
+      _pendingVitals.add(
+          (kind: 'heart_rate', v1: bpm.toDouble(), v2: null, unit: 'bpm', device: '手表直读', ts: now));
+      // 队列里记本地 id：flush 时按 kind+时间找回来拼云 id（见 _flushPendingVitals）
+      _pendingVitalIds.add(id);
     } catch (_) {}
   }
 
-  /// 直读步数入库 + 推云：1 小时最多一条（计步器是累计值，记快照即可）。
+  /// 待传 vitals 的本地 id（和 _pendingVitals 一一对应，flush 时拼云 id 用）
+  final List<int> _pendingVitalIds = [];
+
+  /// vitals 批量推云（心率/步数攒批传，和血糖同一批 15 分钟走）
+  Future<void> _flushPendingVitals() async {
+    if (_pendingVitals.isEmpty) return;
+    if (!CloudSync.isReady || !CloudSync.loggedIn) return;
+    for (var i = 0; i < _pendingVitals.length; i++) {
+      final p = _pendingVitals[i];
+      final id = i < _pendingVitalIds.length ? _pendingVitalIds[i] : 0;
+      try {
+        await CloudSync.pushVital(
+          localId: id,
+          kind: p.kind,
+          value1: p.v1,
+          value2: p.v2,
+          unit: p.unit,
+          source: 'ble',
+          device: p.device,
+          measuredAt: p.ts,
+        );
+      } catch (_) {}
+    }
+    _pendingVitals.clear();
+    _pendingVitalIds.clear();
+  }
+
+  /// 直读步数入库：1 小时最多一条（计步器是累计值，记快照即可）。
+  /// 推云同样走批量（见 _cacheHr 注释），不逐条传。
   DateTime _lastStepsCache = DateTime.fromMillisecondsSinceEpoch(0);
   Future<void> _cacheSteps(int steps) async {
     final now = DateTime.now();
@@ -452,15 +539,9 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         device: '手表直读',
         recordedAt: now,
       );
-      await CloudSync.pushVital(
-        localId: id,
-        kind: 'steps',
-        value1: steps.toDouble(),
-        unit: '步',
-        source: 'ble',
-        device: '手表直读',
-        measuredAt: now,
-      );
+      _pendingVitals.add(
+          (kind: 'steps', v1: steps.toDouble(), v2: null, unit: '步', device: '手表直读', ts: now));
+      _pendingVitalIds.add(id);
     } catch (_) {}
   }
 
@@ -720,18 +801,25 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   }
 
   Future<void> _buzzForLevel() async {
-    if (_lowAlert || _highAlert) {
-      // 低血糖三短震 / 高血糖两长震（用系统震动，手表端无需插件）
-      final times = _lowAlert ? 3 : 2;
-      for (var i = 0; i < times; i++) {
-        HapticFeedback.heavyImpact();
-        await Future.delayed(
-            Duration(milliseconds: _lowAlert ? 400 : 700));
-      }
-    } else {
-      HapticFeedback.lightImpact();
+    // 省电模式：只在血糖真正超限（低<3.9 / 高>10）时震。
+    // 之前正常值也 lightImpact 震一下：微泰 1 分钟一个数，手表每分钟震一次，
+    // 戴着啥也干不了——这就是"手表不停振动"的病根。正常值直接静默。
+    if (!_lowAlert && !_highAlert) return;
+    // 同一轮超限只震一次：值没变只时间刷新的重复包不再震。
+    // 否则微泰每分钟一个同值包，手表每分钟三连震，照样没法戴。
+    final sig = '${_lowAlert ? 'L' : 'H'}:${_mmolL.toStringAsFixed(1)}';
+    if (sig == _lastBuzzSig) return;
+    _lastBuzzSig = sig;
+    // 低血糖三短震 / 高血糖两长震（用系统震动，手表端无需插件）
+    final times = _lowAlert ? 3 : 2;
+    for (var i = 0; i < times; i++) {
+      HapticFeedback.heavyImpact();
+      await Future.delayed(
+          Duration(milliseconds: _lowAlert ? 400 : 700));
     }
   }
+
+  String _lastBuzzSig = '';
 
   String _fmtTime(DateTime ts) {
     final hh = ts.hour.toString().padLeft(2, '0');
@@ -746,10 +834,17 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     return '$hh:$mm';
   }
 
-  /// 手表抬腕看的日期时间：9月24日 周三 15:40
+  /// 手表抬腕看的日期时间：9月24日 周三 15:40（跨年/跨天一眼能认出来，
+  /// 用户要求：血糖必须带日期和时间，只看时间半夜跨天的数会误判）。
+  /// 同一天显示"今天 HH:MM"，跨天显示"M月d日 周X HH:MM"。
   String _fmtDateTime(DateTime ts) {
     const week = ['一', '二', '三', '四', '五', '六', '日'];
     final w = week[(ts.weekday - 1).clamp(0, 6)];
+    final now = DateTime.now();
+    final sameDay = ts.year == now.year &&
+        ts.month == now.month &&
+        ts.day == now.day;
+    if (sameDay) return '今天 ${_fmtHM(ts)}';
     return '${ts.month}月${ts.day}日 周$w ${_fmtHM(ts)}';
   }
 
@@ -940,8 +1035,12 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
         const SizedBox(height: 2),
+        // 数值时间 = 血糖测得的时间（不是现在）：看数先看"什么时候的数"，
+        // 跨天的旧数一眼能认出来（今天只显示时间，跨天带 MM-DD 日期）。
+        // 注意：这里显示的是 d.ts（传感器出数时间），上面那行是"现在几点"
+        // （抬腕看表），两行别搞混。
         Text(
-          _fmtDateTime(DateTime.now()),
+          _fmtDateTime(d.ts),
           style: TextStyle(fontSize: small + 2, color: Colors.white70),
         ),
         const SizedBox(height: 2),
