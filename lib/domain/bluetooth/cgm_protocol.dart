@@ -846,9 +846,9 @@ class SibionicsLiteProtocol extends SibionicsProtocol {
 
   @override
   bool matches(ScanResult r) {
-    // 先走父类匹配（设备名 10 位大写数字字母 / 5347 service），
-    // 真机确认分体款广播特征后再收紧，避免和一体式抢设备。
-    return super.matches(r);
+    // 用户实测 LT2408LBFL 就是 GS1 一体式：分体式广播特征未确认前，
+    // 不抢设备，全部交父类 GS1 处理，避免界面误标"分体式"。
+    return false;
   }
 
   @override
@@ -931,8 +931,9 @@ class BleCgmManager {
     Libre3Protocol(),
     DexcomG6Protocol(),
     DexcomG7Protocol(),
-    SibionicsLiteProtocol(), // 硅基分体式先试（同通道，日志会标分体式）
-    SibionicsProtocol(), // 硅基一体式 GS1/GS3
+    // 硅基分体式广播特征未确认前不抢设备，统一走 GS1/GS3 握手
+    // （用户实测 LT2408LBFL 就是 GS1 一体式）
+    SibionicsProtocol(), // 硅基 GS1/GS3
     SinocareICanProtocol(), // 三诺爱看：名字占位，协议待抓包
     OttaiM8Protocol(), // 欧态 M8：名字占位，协议待抓包
     AccuSmartGuideProtocol(),
