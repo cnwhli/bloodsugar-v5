@@ -105,9 +105,12 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           await AppDatabase.instance.insertReadingDedup(reading);
       if (!mounted) return;
       setState(() {
+        // UI 去重必须带发射器：微泰和硅基序号各自从 0 计数，
+        // 只比序号会把硅基新点当微泰重复吞掉——"连上了但看不到数"的病根。
         final dup = reading.minFromStart != null
-            ? _readings.any(
-                (r) => r.minFromStart == reading.minFromStart)
+            ? _readings.any((r) =>
+                r.minFromStart == reading.minFromStart &&
+                r.sensorId == reading.sensorId)
             : _readings.any((r) =>
                 (r.valueMmolL - reading.valueMmolL).abs() < 0.06 &&
                 r.timestamp.difference(reading.timestamp).inSeconds.abs() <

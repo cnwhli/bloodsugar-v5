@@ -1501,6 +1501,7 @@ class BleCgmManager {
     }
     await protocol.handleDevice(device, (reading) {
       _emitReading(reading); // 进 history 缓存，切页/重进不丢
+      _linkWatchdog(); // 连接型也喂狗：有数=链路活，没数才报断链
     }, _log);
     _connectedDevice = device;
     _setState(BleCgmState.connected);
