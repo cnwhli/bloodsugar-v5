@@ -711,10 +711,14 @@ class SibionicsProtocol extends CgmProtocol {
       final w = ff32;
       await ff31.setNotifyValue(true);
       log('已订阅 FF31（${device.platformName}），写认证包…');
-      // 认证包需 RC4 加密后写出
+      // 认证包需 RC4 加密后写出。必须带响应写（withoutResponse:false）：
+      // Juggluco 写 FF32 用的是默认带响应写；之前全用免响应写，
+      // 发射器那边可能根本没收到——"补发也执行了但零回包"的最大嫌疑。
       final mac = device.remoteId.toString();
       final authPlain = sibAuthPacket(mac);
-      await w.write(sibRc4(authPlain), withoutResponse: true);
+      final authEnc = sibRc4(authPlain);
+      log('认证包明文：${authPlain.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+      await w.write(authEnc, withoutResponse: false);
       var lastIndex = 0;
       var bound = false;
       // 分体式（轻享/动感发射器复用）：认证包可能石沉大海，FF31 一直无回包。
