@@ -36,7 +36,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   // 手动选设备：扫到的可连设备多选 + 白名单开关（默认自动模式见谁连谁）
   Set<String> _picked = {}; // 页面勾选（大写名）；点"只连选中的"才生效
   Map<String, SeenDevice> _seen = {};
-  bool _manualOn = false;
+  bool _manualOn = false; // 仅 initState 回读用；显示一律以 manager 白名单为准
   // 分钟级断流盯防：页面开着时每 30 秒查一次 manager，没新数就打日志、
   // 3 分钟报断链。之前 checkLinkLost/checkDataGap 写了但没人调——
   // 这就是"23:32→23:25 七分钟空洞"全程静默无感知的病根。
