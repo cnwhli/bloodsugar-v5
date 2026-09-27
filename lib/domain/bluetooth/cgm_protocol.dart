@@ -1281,8 +1281,14 @@ class BleCgmManager {
                   advName, r.rssi, id, protocol.brand.displayName);
               _seenDevicesDirty = true;
             }
+            // 信号门限：弱于 -90dBm 的连接型设备不试连。之前自动模式见谁连谁，
+            // -95dBm 的 YD/MiCar 也去连，必 133 超时，还占着射频拖累微泰广播。
+            // LT 真机 -61~-75，能过；-92 以下的基本连不上，不浪费射频。
+            // 广播型（微泰）不受影响——被动听，不需要连。
+            if (r.rssi < -90) {
+              continue;
+            }
             // 退避：失败/断开过的设备别见面就连。之前每次广播都立刻重连，
-            // 每次重连 stopScan 几秒——微泰广播在这几秒里全丢，
             // 硅基反复连不上时微泰被连带饿死，"连着连着都没数了"。
             final fails = _connFailCount[id] ?? 0;
             final last = _lastConnAttempt[id];
