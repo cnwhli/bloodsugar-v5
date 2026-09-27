@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../data/datasource/local_db.dart';
+import '../../domain/bluetooth/cgm_device_profiles.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/alert_service.dart';
 import '../../services/bg_sync.dart';
@@ -563,6 +564,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   // 已用天数：只对分钟序号口径的品牌算（微泰 AiDEX 全系广播 minFromStart
   // 就是启动分钟数，/1440 取整；组里取最大 seq，补洞旧点不拉低天数）。
   // 硅基 seq 非分钟口径返回 null 不显示——瞎报一天比不报更坏。
+  // 到期线查 cgm_device_profiles.dart（微泰 14 / 三诺 15 / 美敦力 7…），别手写 14。
   int? _useDaysOf(List<GlucoseReading> items) {
     if (items.isEmpty) return null;
     final b0 = items.first.brand.name.toLowerCase();
@@ -629,9 +631,13 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                       // 就是启动分钟数，/1440 取整）；硅基 seq 非分钟口径
                       // 不算不显示，免得瞎报。
                       final days = _useDaysOf(items);
+                      // 到期线查档案表：微泰 14 / 三诺 15 / 鱼跃 14 / Guardian 7…
+                      final wearDays = cgmProfileOf(key)?.wearDays ?? 14;
                       final daysTxt = days == null
                           ? ''
-                          : (days >= 14 ? ' · 已用 $days 天（到期附近）' : ' · 已用 $days 天');
+                          : (days >= wearDays - 1
+                              ? ' · 已用 $days 天（到期附近）'
+                              : ' · 已用 $days 天');
                       return Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 6),

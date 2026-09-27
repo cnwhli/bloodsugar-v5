@@ -37,6 +37,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/datasource/local_db.dart';
 import 'libre2_crypto.dart';
+import 'cgm_device_profiles.dart';
 import 'sibionics_crypto.dart';
 
 // UUID 短显示：标准 128-bit 取中间段（如 181F/FF31）；
@@ -1300,12 +1301,11 @@ class BleCgmManager {
 
   DateTime _lastDataAt = DateTime.now();
   bool _linkLostBuzzed = false;
-  // ---- 分设备看门狗：微泰 1 分钟一点，硅基 5 分钟一点，不能用同一根线量 ----
-  // 之前全设备共用 _lastDataAt：一台有数就全复位，另一台断了 10 分钟也看不见；
-  // 而且 90 秒/3 分钟的线是按微泰画的，硅基正常 5 分钟才来一点，
-  // 硅基一来就"没新数X分X秒"误报，用户看着像断流。
-  // 现在每发射器记自己的 lastDataAt（key=品牌·sensorId，和分页同口径），
-  // 微泰线 90s/3min，硅基线 6min/12min（5 分钟 cadence + 1 分钟余量）。
+  // ---- 分设备看门狗：各家 cadence 不一样，不能用同一根线量 ----
+  // 教训：之前 90 秒/3 分钟一刀切（按微泰画的线），硅基正常 5 分钟才来一点，
+  // 每个正常间隔都被误判"断链"还自动重扫掐 GATT——"硅基总是断流"的病根之一。
+  // 现在阈值只查 cgm_device_profiles.dart 那张表（2026-09-27 联网核对过各家
+  // 官网/说明书），新增品牌只加表行，不许手写魔法数。
   final Map<String, DateTime> _devLastDataAt = {};
   String _devWatchKey(String brandLabel, String sensorId) =>
       sensorId.isEmpty ? brandLabel : '$brandLabel · $sensorId';
@@ -1313,29 +1313,17 @@ class BleCgmManager {
     _devLastDataAt[_devWatchKey(brandLabel, sensorId)] = DateTime.now();
   }
 
-  // 硅基系品牌名（含中文显示名 + 枚举名，全小写匹配，免得改名又漏）
-  bool _isSibionics(String brandLabel) {
-    final b = brandLabel.toLowerCase();
-    return b.contains('sibionics') ||
-        b.contains('硅基') ||
-        b.contains('gs1') ||
-        b.contains('gs3');
-  }
-  // 分钟级断流盯防：AiDEX 每分钟广播一次，正常 60-90 秒必有新数。
-  // 之前 5 分钟才报断链，中间 7-8 分钟空洞静默无感知。
-  // 改为：90 秒无数 → 打"X分X秒没新数"（只日志不震动）；
-  // 3 分钟无数 → 报断链（震动+自动重扫），空洞压到 3 分钟内。
+  // 品牌阈值只查 cgm_device_profiles.dart（cgmProfileOf），这里不许手写分钟数。
+  // 空洞预警线=各家 cadence+1分钟余量，断链线=漏2个点左右；未知品牌走默认严线。
   DateTime _lastGapWarnAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// 供页面/后台定时调用：检查是否断链（分设备分线：微泰 3 分钟，硅基 12 分钟）
+  /// 供页面/后台定时调用：检查是否断链（分设备查表：微泰 3 分钟，硅基 12 分钟…）
   /// 返回 true = 刚判定断链（调用方负责震动/通知，只触发一次直到恢复）
-  /// 硅基正常 5 分钟一点：12 分钟（漏 2 个点）才报断链，之前 3 分钟一刀切，
-  /// 硅基每个正常间隔都被判"断链"还自动重扫——重扫 stopScan 断 GATT，
-  /// 好好的硅基连接被自己掐断，这就是"硅基总是断流"的病根之一。
   bool checkLinkLost() {
     // 分设备线：任一设备超自己线即断链（报哪台，页面重扫不瞎连）
     for (final e in _devLastDataAt.entries) {
-      final threshMin = _isSibionics(e.key) ? 12 : 3;
+      final threshMin =
+          cgmProfileOf(e.key)?.linkLostMins ?? defaultLinkLostMins;
       if (DateTime.now().difference(e.value).inMinutes >= threshMin) {
         if (!_linkLostBuzzed) {
           _linkLostBuzzed = true;
@@ -1354,19 +1342,18 @@ class BleCgmManager {
     return false;
   }
 
-  /// 分钟级空洞预警：按设备 cadence 分线判（微泰 90 秒，硅基 6 分钟），
+  /// 分钟级空洞预警：按设备 cadence 查表判，
   /// 让"23:32→23:25 这种 7 分钟空洞"在发生后就被看见，
   /// 而不是等用户翻列表才发现。返回 true = 刚预警（调用方可刷新页面）。
-  /// 硅基正常 5 分钟才一点：6 分钟内有数就不报，免得"没新数X分X秒"误报
-  /// 让用户以为断流（其实是发射器 cadence 就是 5 分钟）。
   bool checkDataGap() {
     DateTime? worstGapAt;
     String? worstDev;
     var worstSecs = 0;
     for (final e in _devLastDataAt.entries) {
       final gapSecs = DateTime.now().difference(e.value).inSeconds;
-      // 分线：硅基 6 分钟，别的 90 秒
-      final thresh = _isSibionics(e.key) ? 360 : 90;
+      // 查表：硅基 6 分钟，微泰 90 秒，三诺 4 分钟…
+      final thresh =
+          cgmProfileOf(e.key)?.gapWarnSecs ?? defaultGapWarnSecs;
       if (gapSecs >= thresh && gapSecs > worstSecs) {
         worstSecs = gapSecs;
         worstGapAt = e.value;
@@ -1391,8 +1378,11 @@ class BleCgmManager {
     }
     _lastGapWarnAt = DateTime.now();
     final gap = DateTime.now().difference(worstGapAt!);
-    _log('$worstDev 没新数 ${gap.inMinutes}分${gap.inSeconds % 60}秒了'
-        '（${_isSibionics(worstDev) ? '硅基正常 5 分钟一点，超 6 分钟才算异常' : '微泰每分钟广播一次；先看距离、官方App杀了没'}）');
+    final prof = cgmProfileOf(worstDev);
+    final hint = prof == null
+        ? '先看距离、官方App杀了没'
+        : '${prof.notes.split('。').first}；先看距离、官方App杀了没';
+    _log('$worstDev 没新数 ${gap.inMinutes}分${gap.inSeconds % 60}秒了（$hint）');
     return true;
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../data/datasource/local_db.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import '../../domain/bluetooth/cgm_device_profiles.dart';
 import '../../domain/bluetooth/cgm_protocol.dart';
 import '../../services/bg_sync.dart';
 import '../../services/health_bridge.dart';
@@ -88,6 +89,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
   // 已用天数：只有分钟序号口径的品牌才算（微泰 AiDEX 全系：广播
   // minFromStart 就是启动分钟数）。硅基 seq 非分钟口径不算，返回 null
   // 不显示——瞎报一天比不报更坏。
+  // 到期线查 cgm_device_profiles.dart（微泰 14、三诺 15…），别手写 14。
   int? _useDaysOf(String brandName, int? seq) {
     if (seq == null || seq < 0) return null;
     final b = brandName.toLowerCase();
@@ -929,19 +931,24 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
         // 已用天数（微泰分钟口径才有；硅基不显示，免得瞎报）。
-        // 只提醒不锁死：到期停播是发射器自己停的，App 侧继续收。
+        // 到期线查档案表（微泰14/三诺15/…），只提醒不锁死：
+        // 到期停播是发射器自己停的，App 侧继续收。
         if (d.useDays != null)
           Padding(
             padding: const EdgeInsets.only(top: 2),
-            child: Text(
-              d.useDays! >= 14
-                  ? '已用 ${d.useDays} 天（到期附近，数值勤对照指血）'
-                  : '已用 ${d.useDays} 天',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: small,
-                  color: d.useDays! >= 14 ? Colors.orange : Colors.grey),
-            ),
+            child: Builder(builder: (context) {
+              final wearDays = cgmProfileOf(d.brand)?.wearDays ?? 14;
+              final nearEnd = d.useDays! >= wearDays - 1;
+              return Text(
+                nearEnd
+                    ? '已用 ${d.useDays} 天（到期附近，数值勤对照指血）'
+                    : '已用 ${d.useDays} 天',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: small,
+                    color: nearEnd ? Colors.orange : Colors.grey),
+              );
+            }),
           ),
         const SizedBox(height: 8),
         // 心率/步数卡片（和旧数值页一致，抬腕一眼全）
