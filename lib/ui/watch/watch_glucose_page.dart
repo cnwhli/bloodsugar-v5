@@ -727,6 +727,66 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
     );
   }
 
+  /// 诊断折叠（数值页/设备页共用）：状态 + 最近 10 条日志。
+  /// 之前只有占位页有诊断，有设备页时切过去就没了——"日志和状态没有了"的病根。
+  Widget _buildDiagFold(double small) {
+    final logs = _diagLogs.length > 10
+        ? _diagLogs.sublist(_diagLogs.length - 10)
+        : List.of(_diagLogs);
+    final cloudTxt = !CloudSync.isReady
+        ? '云未就绪'
+        : !CloudSync.loggedIn
+            ? '云未登录（只直连可用）'
+            : (CloudSync.realtimeOnline ? '云同步在线' : '云已登录（订阅未连）');
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          _lowPowerOn
+              ? '监听中 · $_scanState · $cloudTxt'
+              : '$_scanState · $cloudTxt',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: small - 1, color: Colors.grey),
+        ),
+        const SizedBox(height: 6),
+        GestureDetector(
+          onTap: () => setState(() => _showDiag = !_showDiag),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              _showDiag ? '收起诊断日志 ▲' : '诊断日志 · 点我查看 ▼',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: small, color: Colors.blue),
+            ),
+          ),
+        ),
+        if (_showDiag) ...[
+          const SizedBox(height: 4),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              logs.isEmpty ? '暂无日志：还没开始扫描' : logs.join('\n'),
+              style: const TextStyle(
+                  fontSize: 10, color: Colors.white70),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   /// 点历史页切换范围
   void _cycleRange() {
     setState(() {
@@ -868,99 +928,135 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
       body: SafeArea(
         child: WatchAdaptiveLayout(
           shape: widget.shape,
-          child: Column(
-            children: [
-              Expanded(
-                // 按设备分页：几个发射器就几个数值页（2 个 2 页，3 个 3 页），
-                // 后面再跟历史 + 统计。Tab 标签截断看不清的，页头有全名。
-                child: PageView(
-                  controller: _pager,
-                  onPageChanged: (i) => setState(() => _page = i),
-                  children: [
-                    // 数值页：每个设备一页（没数时 1 页占位）
-                    if (_devKeys.isEmpty)
-                      GestureDetector(
-                        onTap: () async {
-                          await _loadLocal();
-                          await _refreshSport();
-                        },
-                        onLongPress: () async {
-                          HapticFeedback.heavyImpact();
-                          await _toggleScan();
-                        },
-                        child: SingleChildScrollView(
-                          child: _buildValuePage(
-                              statusColor: statusColor),
-                        ),
-                      )
-                    else
-                      for (final key in _devKeys)
-                        GestureDetector(
-                          onTap: () async {
-                            await _loadLocal();
-                            await _refreshSport();
-                          },
-                          onLongPress: () async {
-                            HapticFeedback.heavyImpact();
-                            await _toggleScan();
-                          },
-                          child: SingleChildScrollView(
-                            child: _buildDeviceValuePage(
-                              key,
-                              statusColor: statusColor,
-                            ),
-                          ),
-                        ),
-                    // 历史（点一下切范围，长按开关监听）
-                    GestureDetector(
-                      onTap: _cycleRange,
-                      onLongPress: () async {
-                        HapticFeedback.heavyImpact();
-                        await _toggleScan();
-                      },
-                      child: SingleChildScrollView(
-                        child: _buildHistoryPage(),
-                      ),
-                    ),
-                    // 统计（点一下切 7/14/30，长按开关监听）
-                    GestureDetector(
-                      onTap: _cycleLongRange,
-                      onLongPress: () async {
-                        HapticFeedback.heavyImpact();
-                        await _toggleScan();
-                      },
-                      child: SingleChildScrollView(
-                        child: _buildStatsPage(statusColor),
-                      ),
-                    ),
-                  ],
-                ),
-              ), // Expanded(PageView 数值N页 + 历史 + 统计）结束
-              const SizedBox(height: 4),
-              // 页点：数值页（设备数）+ 历史 + 统计，当前页高亮
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(
-                  _pageCount,
-                  (i) => Container(
-                    width: 6,
-                    height: 6,
-                    margin:
-                        const EdgeInsets.symmetric(horizontal: 3),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: i == _page
-                          ? Colors.white
-                          : Colors.white24,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 2),
-            ],
+          // 手表蓝牙页 = 数值页置顶（先看到血糖），下面才是选设备/诊断。
+          // 之前监听按钮→选设备→诊断堆在数值上面：用户要点好几下、滑好几屏
+          // 才看到数——"页面不舒服"的病根。改成：数值在最上，别的全折叠在下。
+          child: _watchTopValueFirst(
+            context,
+            statusColor: statusColor,
           ),
         ),
       ),
+    );
+  }
+
+  /// 手表蓝牙页总装：数值置顶 + 下面 PageView（数值N页/历史/统计）左右滑。
+  /// 置顶条：最新值+时间+监听状态，进页第一眼就是数，不用滑。
+  /// PageView 本身就是左右滑手势：每个数值页/历史/统计都能左右滑切换，
+  /// 之前手势被 GestureDetector 的点按/长按盖住容易误触，这里把点按收敛到
+  /// 按钮上，滑动留给 PageView + 竖滑留给 SingleChildScrollView，互不抢。
+  Widget _watchTopValueFirst(BuildContext context,
+      {required Color statusColor}) {
+    final small = widget.shape.isCircular ? 11.0 : 13.0;
+    String topTxt;
+    if (_devKeys.isNotEmpty) {
+      final d = _devs[_devKeys.first];
+      topTxt = d == null
+          ? '--'
+          : '${d.v.toStringAsFixed(1)} · ${_fmtTime(d.ts)}${d.fromCloud ? ' ☁️' : ''}';
+    } else if (_hasData) {
+      topTxt = '${_mmolL.toStringAsFixed(1)} · ${_fmtTime(_updatedAt)}';
+    } else {
+      topTxt = '暂无数据';
+    }
+    final cloudTxt = !CloudSync.isReady
+        ? '云未就绪'
+        : !CloudSync.loggedIn
+            ? '云未登录（只直连可用）'
+            : (CloudSync.realtimeOnline ? '云同步在线' : '云已登录（订阅未连）');
+    return Column(
+      children: [
+        // 置顶条：数值 + 状态，一眼。点一下手动刷新（本地库+运动数据）。
+        GestureDetector(
+          onTap: () async {
+            await _loadLocal();
+            await _refreshSport();
+          },
+          child: Container(
+          width: double.infinity,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white10,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                topTxt,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: small + 6,
+                  fontWeight: FontWeight.bold,
+                  color: statusColor,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                _lowPowerOn
+                    ? '监听中 · $_scanState · $cloudTxt'
+                    : '$_scanState · $cloudTxt',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: small - 1, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+        ),
+        const SizedBox(height: 4),
+        Expanded(
+          // 按设备分页：几个发射器就几个数值页，后面跟历史 + 统计。
+          // 左右滑 = PageView 原生手势，每页都能滑；页点可点跳页。
+          child: PageView(
+            controller: _pager,
+            onPageChanged: (i) => setState(() => _page = i),
+            children: [
+              if (_devKeys.isEmpty)
+                SingleChildScrollView(
+                  child: _buildValuePage(statusColor: statusColor),
+                )
+              else
+                for (final key in _devKeys)
+                  SingleChildScrollView(
+                    child: _buildDeviceValuePage(
+                      key,
+                      statusColor: statusColor,
+                    ),
+                  ),
+              SingleChildScrollView(
+                child: _buildHistoryPage(),
+              ),
+              SingleChildScrollView(
+                child: _buildStatsPage(statusColor),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        // 页点：可点跳页（小屏点按比滑动更稳），当前页高亮
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(
+            _pageCount,
+            (i) => GestureDetector(
+              onTap: () => _pager.jumpToPage(i),
+              child: Container(
+                width: 10,
+                height: 10,
+                margin:
+                    const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color:
+                      i == _page ? Colors.white : Colors.white24,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 2),
+      ],
     );
   }
 
@@ -1128,6 +1224,10 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         // 之前设备数值页没有这个入口：数值页想锁设备得滑回占位页找，
         // 手表上根本想不到——这就是"交互不行"的病根之一。
         _buildWatchDevicePicker(small),
+        const SizedBox(height: 6),
+        // 状态 + 诊断折叠：每个设备页都有，不用滑回占位页找。
+        // 之前只有占位页有，有数切到设备页就没了——"日志和状态没有了"。
+        _buildDiagFold(small),
         const SizedBox(height: 12),
       ],
     );

@@ -1495,6 +1495,14 @@ class BleCgmManager {
           handled = true;
           final name = advName.isEmpty ? id : advName;
           if (protocol.isAdvertisementBased) {
+            // 广播型（微泰 AiDEX）也收录进可选列表：之前这里从不写
+            // _seenDevices，选设备区只显示连接型，微泰用户看到的就是
+            // "啥也扫描不出来"（日志里有"附近："但列表空）。
+            if (advName.isNotEmpty) {
+              _seenDevices[advName.toUpperCase()] = SeenDevice(
+                  advName, r.rssi, id, protocol.brand.displayName);
+              _seenDevicesDirty = true;
+            }
             // 多点解析：广播包里带的 prev 历史点也一起收（App 刚开/中间漏扫时补洞）。
             // 同序号去重（_shouldEmit）只放行当前分钟的新点；历史点走批量补洞通道。
             // 关键：当前点的时间戳按发射器分钟序号对齐到整分（minFromStart→整分），

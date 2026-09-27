@@ -699,8 +699,12 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
+      // 整页可竖滑：品牌区/设备区展开时，整页上下滑找数——
+      // "手机端链接血糖仪页面不能上下滑动"的病根：之前 Column+Expanded，
+      // 上面几块固定不动，设备多时列表被压到一行都看不见，只能干瞪眼。
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
           // 状态栏：深色模式下强制深底白字（之前白底在深色模式看不见字）
           Container(
             padding: const EdgeInsets.all(12),
@@ -834,8 +838,11 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           const SizedBox(height: 4),
           // 手动选设备区：扫到的可连设备多选，"只连选中的"锁定
           _buildDevicePicker(),
-          // 最近读数（按设备分组：微泰/硅基各看各的，不再混一条线）
-          Expanded(
+          // 最近读数（按设备分组：微泰/硅基各看各的，不再混一条线）。
+          // 整页已包 SingleChildScrollView：这里给固定高度（400），
+          // 列表在里面自己滚 + 整页也能竖滑，两层不抢——TabBar 左右滑切设备。
+          SizedBox(
+            height: 400,
             child: _readings.isEmpty
                 ? const Center(
                     child: Text(
@@ -863,7 +870,9 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                   .toList(),
             ),
           ),
+          const SizedBox(height: 8),
         ],
+      ),
       ),
     );
   }
