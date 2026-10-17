@@ -1,21 +1,49 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// 冒烟测试：App 能启动。
+// 注意：sqflite 在纯 Dart 测试环境不可用（databaseFactory 未初始化），
+// 因此这里不启动完整 App，只验证核心 widget（WatchGlucoseTile）可渲染。
+// 完整启动链路由 plugin 依赖（sqflite/bluetooth），属于集成测试范畴。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:bloodsugar_v5/main.dart';
+import 'package:bloodsugar_v5/ui/watch/watch_glucose_tile.dart';
 
 void main() {
-  testWidgets('App launches smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const BloodSugarApp());
+  testWidgets('WatchGlucoseTile renders value and trend', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: WatchGlucoseTile(
+              value: 6.7,
+              trend: '→',
+              statusColor: Colors.green,
+            ),
+          ),
+        ),
+      ),
+    );
 
-    // Verify that the dashboard title appears.
-    expect(find.text('血糖管家'), findsOneWidget);
+    expect(find.text('6.7'), findsOneWidget);
+    expect(find.text('→'), findsOneWidget);
+  });
+
+  testWidgets('WatchGlucoseTile high value renders', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: WatchGlucoseTile(
+              value: 13.2,
+              trend: '↑',
+              statusColor: Colors.red,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('13.2'), findsOneWidget);
+    expect(find.text('↑'), findsOneWidget);
   });
 }

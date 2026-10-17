@@ -680,14 +680,14 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
               child: Text(
                 '手表连谁 · $summary ${_watchDevsOpen ? '▲' : '▼'}',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: small, color: Colors.white70),
+                style: const TextStyle(fontSize: 18, color: Colors.white70),
               ),
             ),
           ),
           if (_watchDevsOpen) ...[
             if (list.isEmpty)
               Text('附近暂无设备：先点"手表监听"扫一轮',
-                  style: TextStyle(fontSize: small, color: Colors.grey)),
+                  style: const TextStyle(fontSize: 16, color: Colors.grey)),
             for (final n in list.take(12))
               GestureDetector(
                 onTap: () async {
@@ -708,9 +708,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
                           style: TextStyle(fontSize: small)),
                       Flexible(
                         child: Text(n,
-                            style: TextStyle(
-                                fontSize: small,
-                                color: locked.contains(n)
+                            style: TextStyle(fontSize: 18, color: locked.contains(n)
                                     ? Colors.green
                                     : Colors.white70)),
                       ),
@@ -720,7 +718,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
               ),
             Text('点一下锁定，再点取消；云只同步血糖不同步选择',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: small - 1, color: Colors.grey)),
+                style: TextStyle(fontSize: 20, color: Colors.grey)),
           ],
         ],
       ),
@@ -746,7 +744,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
               ? '监听中 · $_scanState · $cloudTxt'
               : '$_scanState · $cloudTxt',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: small - 1, color: Colors.grey),
+          style: TextStyle(fontSize: 20, color: Colors.grey),
         ),
         const SizedBox(height: 6),
         GestureDetector(
@@ -998,7 +996,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
                     ? '监听中 · $_scanState · $cloudTxt'
                     : '$_scanState · $cloudTxt',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: small - 1, color: Colors.grey),
+                style: TextStyle(fontSize: 20, color: Colors.grey),
               ),
             ],
           ),
@@ -1093,7 +1091,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
               child: Text(
                 key,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: small, color: Colors.white70),
+                style: const TextStyle(fontSize: 18, color: Colors.white70),
               ),
             ),
           ],
@@ -1198,7 +1196,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           return Text(
             conn == null ? '本机直连：无（数是手机同步来的）' : '本机直连：$conn',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: small, color: Colors.white70),
+            style: const TextStyle(fontSize: 18, color: Colors.white70),
           );
         }),
         const SizedBox(height: 6),
@@ -1298,6 +1296,16 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           style: TextStyle(fontSize: small, color: Colors.grey),
         ),
         const SizedBox(height: 8),
+        /* 开始监听按钮 - 48px 触区 */
+        ElevatedButton(
+          onPressed: _toggleScan,
+          style: ElevatedButton.styleFrom(
+            minimumSize: const Size(double.infinity, 48),
+            padding: EdgeInsets.zero,
+          ),
+          child: const Text('开始监听', style: TextStyle(fontSize: 16, color: Colors.white)),
+        ),
+        /* 以上，开始监听按钮 - 48px 触区 */
         // 心率/步数卡片：放大置顶（用户主要看心跳，之前被挤出屏）。
         // 有数白字，无数灰字 --，一眼看出传感器通没通。
         Container(
@@ -1344,7 +1352,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         Text(
           _lowPowerOn ? '监听中 · $_scanState' : _scanState,
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: small - 1, color: Colors.grey),
+          style: TextStyle(fontSize: 20, color: Colors.grey),
         ),
         const SizedBox(height: 6),
         // 手表选设备：附近有名的列出来点选锁定（和手机"只连选中的"同口径）。
@@ -1490,10 +1498,10 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
           children: [
             Text(_fmtHM(pts.first.t),
                 style:
-                    TextStyle(fontSize: small - 1, color: Colors.grey)),
+                    TextStyle(fontSize: 20, color: Colors.grey)),
             Text(_fmtHM(pts.last.t),
                 style:
-                    TextStyle(fontSize: small - 1, color: Colors.grey)),
+                    TextStyle(fontSize: 20, color: Colors.grey)),
           ],
         ),
         const SizedBox(height: 4),
@@ -1613,7 +1621,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         ] else
           Text(_longLoading ? '查库中…' : '暂无数据',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: small - 1, color: Colors.grey)),
+              style: TextStyle(fontSize: 20, color: Colors.grey)),
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
@@ -1626,7 +1634,7 @@ class _WatchGlucosePageState extends State<WatchGlucosePage>
         ),
         const SizedBox(height: 4),
         Text('左右滑切换数值/历史/统计',
-            style: TextStyle(fontSize: small - 1, color: Colors.grey)),
+            style: TextStyle(fontSize: 20, color: Colors.grey)),
         const SizedBox(height: 12),
       ],
     );

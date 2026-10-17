@@ -58,6 +58,7 @@ One app for your phone and your watch — real-time glucose, health vitals, and 
 - **硬件直读心率与计步**：原生通道直通 `SensorManager`（`TYPE_HEART_RATE` + `TYPE_STEP_COUNTER`），最低功耗采样；国行无谷歌框架照常用，无需 Health Connect 中转；心率/步数推云也进批量队列，不逐条传
 - **灭屏保活**：前台服务 + 电池白名单引导，熄屏、切后台照样收数，通知栏实时可见
 - 版面为圆屏优化：血糖数字克制，心率 / 步数 / 运动卡片置顶，一眼即达
+- **手表触控大修**：开始监听改为 48px 触区按钮（原文字太小点不准）；数值/时间等关键文字 18-20px 起步，圆屏上不再眯眼看；WatchGlucoseTile 独立成组件（大数字+趋势胶囊+状态底色），有单测覆盖
 
 ### 📱 手机端 — 信息中枢
 
