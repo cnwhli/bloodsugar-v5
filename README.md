@@ -170,3 +170,4 @@ test/agp_stats_test.dart                      # 6 用例，flutter test 全过
 | DiaBLE | Libre 2/3、Dexcom G7 流程 |
 | xDrip+ | Dexcom G6 握手 |
 | AndroidAPS / OpenAPS | 泵协议框架、FIAST 剂量算法 |
+# BUILD_DATE: 2026-11-11 11:44
