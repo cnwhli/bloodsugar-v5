@@ -351,6 +351,18 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
             const SizedBox(height: 8),
             _NsCard(runFn: _run, busy: _busy),
           ],
+          // 传感器使用天数设置
+          ListTile(
+            leading: const Icon(Icons.access_time, color: Colors.blue),
+            title: const Text('传感器使用天数'),
+            subtitle: Text('当前：14 天 (官建议) (官建议 14 天)'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('点击进入传感器天数设置，目前默认 14 天，可自行调整')),
+              );
+            },
+          ),
           if (_msg.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(_msg, style: const TextStyle(color: Colors.orange)),

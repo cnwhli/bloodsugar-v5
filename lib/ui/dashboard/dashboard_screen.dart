@@ -29,6 +29,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _latestTime = ''; // 最新读数时间（你要的"血糖时间"）
   // 分设备卡片：每个发射器各最新一条（微泰一张、硅基一张，带各自时间/品牌/已用天数）
   List<Map<String, dynamic>> _perSensor = [];
+  // 传感器使用天数配置（默认 14 天，官方推荐）
+  // 用户可在设置页自行调整，超限将在卡片显示警告
+  static const int _defaultSensorLifeDays = 14;
+  int _customSensorLifeDays = _defaultSensorLifeDays;
   // 每台发射器"约已用 X 天"（库里第一条 → 今天；换新机/清库会重计，误差 ±1 天）
   final Map<String, int> _sensorDays = {};
   DateTime _chartT0 = DateTime.now(); // 曲线首点时间（横轴刻度反推用）
@@ -127,7 +131,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           await AppDatabase.instance.sensorFirstSeen(sid);
       if (first != null) {
         sensorDays[sid] =
-            nowDay.difference(first).inDays.clamp(0, 60);
+            nowDay.difference(first).inDays.clamp(0, _customSensorLifeDays);
       }
     }
     if (!mounted) return;
@@ -473,6 +477,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
+              // 传感器使用提醒卡片
+              Card(
+                color: Colors.orange.withValues(alpha:0.05),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.warning_amber, size: 20, color: Colors.amber),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '传感器使用提醒：官方推荐 14 天/可自定义（设置页调节）。已用天数超限将在分设备卡片显示红色警告，建议及时更换以免读数偏差。',
+                          style: const TextStyle(fontSize: 12, color: Colors.orange),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               // 顶部大数值卡片（仿微泰/硅基：大数字 + mg/dL + 趋势箭头 + 时间）
               Card(
                 color: _statusColor.withValues(alpha: 0.12),
@@ -983,6 +1006,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final brand = '${row['brand'] ?? ''}';
     final sid = '${row['sensor_id'] ?? ''}';
     final days = _sensorDays[sid];
+    // 传感器使用天数警告逻辑
+    final isOverLimit = days != null && days >= _customSensorLifeDays;
+    final warningText = isOverLimit
+        ? '⚠️ 已超 ${_customSensorLifeDays} 天极限，建议更换'
+        : days != null && days >= 13
+            ? '⚠️ 接近极限，请准备更换'
+            : null;
     final color = _statusColorFor(v);
     return Card(
       child: Padding(
@@ -1006,6 +1036,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     style: const TextStyle(
                         fontSize: 12, color: Colors.grey),
                   ),
+                  if (warningText != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      warningText,
+                      style: const TextStyle(
+                          fontSize: 10, color: Colors.redAccent, fontWeight: FontWeight.bold),
+                    ),
+                  ],
                 ],
               ),
             ),
