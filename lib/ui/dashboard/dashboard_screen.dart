@@ -478,27 +478,71 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             children: [
               // 传感器使用提醒卡片
-              Card(
-                color: Colors.orange.withValues(alpha:0.05),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning_amber, size: 20, color: Colors.amber),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          '传感器使用提醒：官方推荐 14 天/可自定义（设置页调节）。已用天数超限将在分设备卡片显示红色警告，建议及时更换以免读数偏差。',
-                          style: const TextStyle(fontSize: 12, color: Colors.orange),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              // 顶部大数值卡片（仿微泰/硅基：大数字 + mg/dL + 趋势箭头 + 时间）
-              Card(
-                color: _statusColor.withValues(alpha: 0.12),
+                                          Card(
+                                            color: Colors.grey.withValues(alpha: 0.03),
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(12.0),
+                                              child: Row(
+                                                children: const [
+                                                  Icon(Icons.access_alarm, size: 20, color: Colors.orange),
+                                                  SizedBox(width: 6),
+                                                  Expanded(
+                                                    child: Text(
+                                                      '传感器使用天数提醒：默认 14 天，已超过将显示橙色/红色警告',
+                                                      style: TextStyle(fontSize: 12, color: Colors.orange),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                          // 传感器使用天数设置入口
+                                          ListTile(
+                                            leading: const Icon(Icons.schedule, color: Colors.orange),
+                                            title: const Text('传感器使用天数'),
+                                            subtitle: Text(_customSensorLifeDays == 14 ? '默认 14 天' : '$_customSensorLifeDays 天'),
+                                            trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                                            onTap: () {
+                                              showDialog(
+                                                context: context,
+                                                builder: (BuildContext context) {
+                                                  final _daysOptions = [7, 10, 14, 21, 30];
+                                                  return AlertDialog(
+                                                    title: const Text('选择传感器使用天数'),
+                                                    content: SingleChildScrollView(
+                                                      child: ListBody(
+                                                        children: _daysOptions.map((int days) {
+                                                          return RadioListTile<int>(
+                                                            title: Text('$days 天'),
+                                                            value: days,
+                                                            groupValue: _customSensorLifeDays,
+                                                            onChanged: (int? value) {
+                                                              setState(() {
+                                                                _customSensorLifeDays = value!;
+                                                              });
+                                                              Navigator.of(context).pop();
+                                                            },
+                                                          );
+                                                        }).toList(),
+                                                      ),
+                                                    ),
+                                                    actions: <Widget>[
+                                                      TextButton(
+                                                        child: const Text('取消'),
+                                                        onPressed: () => Navigator.of(context).pop(),
+                                                      ),
+                                                      TextButton(
+                                                        child: const Text('确定'),
+                                                        onPressed: () => Navigator.of(context).pop(),
+                                                      ),
+                                                    ],
+                                                  );
+                                                },
+                                              );
+                                            },
+                                          ),
+                                          // 顶部大数值卡片（仿微泰/硅基：大数字 + mg/dL + 趋势箭头 + 时间）
+                                          Card(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                       vertical: 16, horizontal: 12),

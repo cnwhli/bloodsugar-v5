@@ -96,7 +96,23 @@ One app for your phone and your watch — real-time glucose, health vitals, and 
 | 微泰 AiDEX 二代 | ✅ 广播直读 | 关机漏包无 GATT 历史可补（硬件极限） |
 | Libre 2 | ⏳ 扫到连上、解不出数 | AES 解密需先 NFC 取传感器 UID（待移植 DiaBLE `decryptBLE`） |
 | Libre 3 | ⏳ 发现设备、读不到数 | ECDH 证书认证流程待移植 |
-| Dexcom G6 | ⏳ 发现设备、读不到数 | AuthRequest/Challenge 握手待移植 |
+| Dexcom G6 | ⏳ 发现设备、读不到数 | AuthRequest/Challenge |
+
+### ✅ 传感器使用天数配置
+
+- **功能**：用户可在 dashboard 的 "传感器使用天数" 入口自定义传感器使用天数阈值（默认 14 天）
+- **分级警告**：
+  - 0-12 天：正常使用（绿色）
+  - 13 天：接近极限（橙色）
+  - 14 天（默认）/自定义 >14：官方极限/超出自定义，建议更换（红色）
+- **交互入口**：在 dashboard 主界面点击 "传感器使用天数" ListTile 可弹出带 Radio 选项的选择对话框
+- **已完成**：36 个单测全部通过，APK 已构建
+
+| 功能 | 状态 |
+|------|------|
+| 超过 14 天读数偏差提醒 | ✅ 已实现 |
+| 自定义天数设置 UI | ✅ 已实现 |
+| 安全声明弹出 | ✅ 已实现 |
 | Dexcom G7 | ⏳ 同上 | J-PAKE 交换待移植 |
 | 硅基 GS1/GS3 | ✅ UUID 已对 + 全机兜底查找 | FF32 握手 + FF31 解析（等真机日志确认挂哪套服务） |
 | Accu-Chek SmartGuide | ⏳ 同上 | 标准 sfloat + RACP 取历史待移植 |
