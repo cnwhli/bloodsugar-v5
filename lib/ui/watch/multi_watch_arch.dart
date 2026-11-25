@@ -70,8 +70,11 @@ class WatchAdaptiveLayout extends StatelessWidget {
   }
 }
 
-/// 圆形手表布局（OPPO Watch 圆形款等）
-/// 特点：四角圆润、内容居中、避免边缘元素
+/// 圆形手表布局（内切正方形方案）
+/// 把内容限制在圆的内接正方形（边长≈直径×0.707）内居中显示：
+/// - 内容保持方形表盘的完整布局，四角不会被圆边裁切
+/// - 相比 ClipOval 全屏方案：不再丢失边角信息、按钮都在可点区域
+/// - 代价：圆的四个扇形区域留空（约 21% 面积），换取内容 100% 可见
 class _CircularWatchLayout extends StatelessWidget {
   final Widget child;
   final EdgeInsets padding;
@@ -80,16 +83,29 @@ class _CircularWatchLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: padding,
-      child: ClipOval(
-        child: SizedBox(
-          width: double.infinity,
-          height: double.infinity,
-          child: Center(
-            child: child,
-          ),
-        ),
+    // 内切正方形方案：把内容放进圆的内接正方形里。
+    // 正方形四个顶点刚好落在圆周上 —— 内容是"方形表盘"布局，
+    // 但 100% 落在圆形可视区内，四角不会被圆边裁掉。
+    // 这就是"看着像方形表盘、圆表里却能全部显示"的关键。
+    return Center(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final h = constraints.maxHeight;
+          // 约束无界时兜底：直接铺满（正常表盘不会走到这里）
+          if (w.isInfinite || h.isInfinite) {
+            return Padding(padding: padding, child: child);
+          }
+          final diameter = w < h ? w : h;
+          // 1/√2 ≈ 0.7071 是内切正方形理论极限；
+          // ×0.96 留表圈/抗锯齿余量，避免顶点贴边被机身遮住。
+          final side = diameter * 0.7071 * 0.96;
+          return SizedBox(
+            width: side,
+            height: side,
+            child: Padding(padding: padding, child: child),
+          );
+        },
       ),
     );
   }

@@ -98,6 +98,13 @@ One app for your phone and your watch — real-time glucose, health vitals, and 
 | Libre 3 | ⏳ 发现设备、读不到数 | ECDH 证书认证流程待移植 |
 | Dexcom G6 | ⏳ 发现设备、读不到数 | AuthRequest/Challenge |
 
+### ✅ 圆形表盘适配 — 内切正方形方案
+
+- **原理**：把内容限制在圆的内接正方形内（边长 ≈ 直径 × 0.707，即 1/√2），正方形四个顶点刚好落在圆周上 —— 看着像方形表盘布局，但内容 100% 落在圆形可视区内，四角不被裁切。
+- **旧方案问题**：`ClipOval` 全屏裁切会让四角内容（按钮/数值）被圆边切掉，漏信息且按钮点不到。
+- **实现**：`multi_watch_arch.dart` 的 `_CircularWatchLayout` 用 `LayoutBuilder` 按屏幕短边算出内切正方形边长（再 ×0.96 留表圈余量），`SizedBox` 限制后居中。
+- **几何测试**：`widget_test.dart` 验证 400×400 表盘下内容被限制在约 255px 的正方形内（<全屏 400，证明确实"调小"），宽高相等、四角完整。
+
 ### ✅ 传感器使用天数配置
 
 - **功能**：用户可在 dashboard 的 "传感器使用天数" 入口自定义传感器使用天数阈值（默认 14 天）
