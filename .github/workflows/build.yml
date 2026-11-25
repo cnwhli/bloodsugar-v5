@@ -54,6 +54,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - run: >-
           flutter build apk --release
+          --android-skip-build-dependency-validation
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
       - uses: actions/upload-artifact@v7
